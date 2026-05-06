@@ -9,11 +9,11 @@ from discord.ext import commands
 
 from bot.config import BotConfig, load_config
 from bot.database import Database
+from bot.event_cog import RobEventCog
 from bot.throne_tracker import ThroneTrackerCog
-from bot.verification import VerificationCog
 
 
-class ButlerBot(commands.Bot):
+class RobBot(commands.Bot):
     def __init__(self, config: BotConfig, database: Database) -> None:
         intents = discord.Intents.default()
         intents.guilds = True
@@ -37,9 +37,9 @@ class ButlerBot(commands.Bot):
     async def setup_hook(self) -> None:
         await self.database.initialize()
 
-        verification_cog = VerificationCog(self, self.config, self.database)
-        await self.add_cog(verification_cog)
-        await verification_cog.service.restore_persistent_views()
+        event_cog = RobEventCog(self, self.config, self.database)
+        await self.add_cog(event_cog)
+        await event_cog.restore_runtime()
 
         await self.add_cog(ThroneTrackerCog(self, self.config, self.database))
 
@@ -53,7 +53,7 @@ class ButlerBot(commands.Bot):
             logging.info("Synced %s global command(s).", len(synced))
 
     async def on_ready(self) -> None:
-        logging.info("The Butler is online as %s.", self.user)
+        logging.info("%s is online as %s.", self.config.bot_name, self.user)
 
     async def close(self) -> None:
         await self.database.close()
@@ -69,12 +69,12 @@ def configure_logging() -> None:
 
 def main() -> None:
     if sys.version_info < (3, 11):
-        raise RuntimeError("The Butler requires Python 3.11 or newer.")
+        raise RuntimeError("Rob requires Python 3.11 or newer.")
 
     configure_logging()
     config = load_config()
     database = Database(config.database_path)
-    bot = ButlerBot(config, database)
+    bot = RobBot(config, database)
     bot.run(config.discord_token, log_handler=None)
 
 
