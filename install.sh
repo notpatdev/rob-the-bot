@@ -130,20 +130,10 @@ from __future__ import annotations
 
 GUILD_ID = ${guild_id}
 
-# --- Channels ---
-WELCOME_CHANNEL_ID = 0
 REGISTRATION_CHANNEL_ID = ${registration_channel_id}
-VERIFICATION_CHANNEL_ID = REGISTRATION_CHANNEL_ID
-VERIFY_LOG_CHANNEL_ID = 0
-GENERAL_CHANNEL_ID = 0
-ROLES_CHANNEL_ID = 0
-INTRODUCTIONS_CHANNEL_ID = 0
 LEADERBOARD_CHANNEL_ID = ${leaderboard_channel_id}
 SEND_TRACK_CHANNEL_ID = ${send_track_channel_id}
 
-# --- Roles ---
-UNVERIFIED_ROLE_ID = 0
-VERIFIED_ROLE_ID = 0
 DOMME_ROLE_ID = ${domme_role_id}
 SUBMISSIVE_ROLE_ID = ${submissive_role_id}
 MODERATION_ROLE_ID = ${moderation_role_id}

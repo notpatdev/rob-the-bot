@@ -187,7 +187,7 @@ class RobEventCog(commands.Cog):
             )
             return
 
-        channel = interaction.guild.get_channel(self.config.verification_channel_id)
+        channel = interaction.guild.get_channel(self.config.registration_channel_id)
         if not isinstance(channel, discord.TextChannel):
             await interaction.response.send_message(
                 "I couldn't find the configured registration channel.",
