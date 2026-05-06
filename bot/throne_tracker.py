@@ -1,11 +1,10 @@
-"""Background task that polls opted-in Dommes' Throne alerts and posts new sends.
+"""Background task that polls registered Dommes' Throne alerts and posts new sends.
 
-The polling loop runs every ``THRONE_POLL_INTERVAL_SECONDS`` (default 5
-minutes). For each Domme who has both a Throne URL and opted in to tracking,
-we first query the public browser-source alert overlays, then fall back to the
-public Throne page scraper if the creator cannot be resolved. New sends are
-diffed against SQLite by ``external_id``, inserted via
-:meth:`Database.log_throne_send`, and posted to the configured send-track
+The polling loop runs every ``THRONE_POLL_INTERVAL_SECONDS``. For each event
+Domme with a registered Throne URL, we first query the public browser-source
+alert overlays, then optionally enrich missing amounts from the public Throne
+page when available. New sends are diffed against SQLite by ``external_id``,
+inserted into the event send table, and posted to the configured send-track
 channel.
 
 The very first poll for a given Domme **seeds** the database with the current
@@ -19,14 +18,14 @@ import asyncio
 import logging
 import random
 import time
-import aiohttp
 import discord
+import aiohttp
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from bot import embeds
 from bot.config import BotConfig
-from bot.database import Database, DommeProfile
+from bot.database import Database, EventDommeRegistration
+from bot.event_embeds import format_money, send_found_embed
 from bot.throne_scraper import ScrapedSend, fetch_recent_sends, normalize_throne_url
 
 log = logging.getLogger(__name__)
@@ -89,13 +88,22 @@ class ThroneTrackerCog(commands.Cog):
         """Run one polling cycle. Returns number of new sends posted."""
         # Prevent overlapping cycles (e.g. timer + manual /throne_refresh).
         async with self._poll_lock:
-            profiles = await self.database.get_all_domme_profiles()
+            event_cog = self.bot.get_cog("RobEventCog")
+            if event_cog is not None and hasattr(event_cog, "ensure_event_state_current"):
+                state = await event_cog.ensure_event_state_current()
+                if not state.is_active:
+                    return 0
+            else:
+                state = await self.database.get_event_state()
+                if not state.is_active:
+                    return 0
+
+            profiles = await self.database.get_all_event_dommes()
             tracked = [
                 p
                 for p in profiles
-                if p.throne_tracking_enabled
-                and p.throne
-                and normalize_throne_url(p.throne) is not None
+                if p.throne_url
+                and normalize_throne_url(p.throne_url) is not None
             ]
             if force_domme_user_id is not None:
                 tracked = [p for p in tracked if p.user_id == force_domme_user_id]
@@ -124,6 +132,14 @@ class ThroneTrackerCog(commands.Cog):
                     if delay > 0:
                         # Add small jitter to avoid synchronised request bursts.
                         await asyncio.sleep(delay + random.uniform(0, delay / 2))
+
+            if posted_total > 0:
+                event_cog = self.bot.get_cog("RobEventCog")
+                if event_cog is not None and hasattr(event_cog, "sync_leaderboard_channel"):
+                    try:
+                        await event_cog.sync_leaderboard_channel()
+                    except Exception:  # noqa: BLE001
+                        log.exception("Failed to sync leaderboard channel after Throne poll.")
 
             return posted_total
 
@@ -155,12 +171,12 @@ class ThroneTrackerCog(commands.Cog):
             self._failure_counts.pop(domme_user_id, None)
         self._slow_retry_until.pop(domme_user_id, None)
 
-    async def _poll_one_domme(self, profile: DommeProfile) -> int:
+    async def _poll_one_domme(self, profile: EventDommeRegistration) -> int:
         """Poll a single Domme; returns number of new sends posted."""
-        assert profile.throne is not None  # filtered above
+        assert profile.throne_url is not None  # filtered above
         http = await self._get_http()
         scraped = await fetch_recent_sends(
-            profile.throne,
+            profile.throne_url,
             http=http,
             user_agent=self.config.throne_user_agent,
             timeout_seconds=self.config.throne_http_timeout_seconds,
@@ -175,11 +191,11 @@ class ThroneTrackerCog(commands.Cog):
         # First-run baseline: if we've never seen any sends for this Domme,
         # store the current page as seeded (claim/leaderboard counts still
         # update) but do not post embeds.
-        is_first_run = not await self.database.has_any_sends_for_domme(
+        is_first_run = not await self.database.has_any_event_sends_for_domme(
             domme_user_id=profile.user_id
         )
 
-        known_external_ids = await self.database.get_known_external_ids_for_domme(
+        known_external_ids = await self.database.get_known_event_external_ids_for_domme(
             domme_user_id=profile.user_id
         )
 
@@ -192,9 +208,9 @@ class ThroneTrackerCog(commands.Cog):
         # Process in chronological order (parser already sorts oldest first).
         posted = 0
         for item in new_items:
-            send_id = await self.database.log_throne_send(
+            send_id = await self.database.log_event_send(
                 domme_user_id=profile.user_id,
-                sub_throne_name=item.sender_name,
+                sub_name=item.sender_name,
                 amount_usd=item.amount_usd if item.amount_usd is not None else 0.0,
                 item_name=item.item_name,
                 item_image_url=item.item_image_url,
@@ -225,7 +241,7 @@ class ThroneTrackerCog(commands.Cog):
                 self.config.send_track_channel_id,
             )
             return
-        send = await self.database.get_send(send_id=send_id)
+        send = await self.database.get_event_send(send_id=send_id)
         if send is None:
             return
         # Resolve the Domme as a member if possible for a nicer mention.
@@ -235,8 +251,46 @@ class ThroneTrackerCog(commands.Cog):
                 domme = await self.bot.fetch_user(domme_user_id)
             except (discord.NotFound, discord.HTTPException):
                 domme = None
+        sub_member: discord.Member | discord.User | None = None
+        if send.claimed_sub_user_id is not None:
+            sub_member = guild.get_member(send.claimed_sub_user_id)
+            if sub_member is None:
+                try:
+                    sub_member = await self.bot.fetch_user(send.claimed_sub_user_id)
+                except (discord.NotFound, discord.HTTPException):
+                    sub_member = None
+        sub_rank = (
+            await self.database.get_event_sub_rank(user_id=send.claimed_sub_user_id)
+            if send.claimed_sub_user_id is not None
+            else None
+        )
+        domme_totals = await self.database.get_event_domme_total(user_id=domme_user_id)
+        sub_label = sub_member.mention if sub_member is not None else "Unclaimed Send"
+        sub_nickname = (
+            getattr(sub_member, "display_name", None)
+            or getattr(sub_member, "name", None)
+            or "Unclaimed Send"
+        )
+        domme_label = domme.mention if domme is not None else f"<@{domme_user_id}>"
+        domme_nickname = (
+            getattr(domme, "display_name", None)
+            or getattr(domme, "name", None)
+            or "Domme"
+        )
+        amount_label = format_money(send.amount_usd) if not send.is_private else "Unknown"
         try:
-            await channel.send(embed=embeds.throne_send_log_embed(send, domme))
+            await channel.send(
+                embed=send_found_embed(
+                    sub_label=sub_label,
+                    domme_label=domme_label,
+                    amount_label=amount_label,
+                    sub_nickname=sub_nickname,
+                    sub_rank=sub_rank,
+                    domme_nickname=domme_nickname,
+                    domme_send_count=domme_totals.send_count,
+                    server_name=guild.name,
+                )
+            )
         except discord.HTTPException:
             log.exception(
                 "Failed to post send embed for send id %s in channel %s.",
@@ -268,6 +322,17 @@ class ThroneTrackerCog(commands.Cog):
         if not _has_moderation_role(interaction.user, self.config):
             await interaction.response.send_message(
                 "Only moderators can run this command.", ephemeral=True
+            )
+            return
+        event_cog = self.bot.get_cog("RobEventCog")
+        if event_cog is not None and hasattr(event_cog, "ensure_event_state_current"):
+            state = await event_cog.ensure_event_state_current()
+        else:
+            state = await self.database.get_event_state()
+        if not state.is_active:
+            await interaction.response.send_message(
+                "The event is not currently running.",
+                ephemeral=True,
             )
             return
 

@@ -11,6 +11,8 @@ from bot import channels
 
 @dataclass(frozen=True)
 class BotConfig:
+    bot_name: str
+    event_name: str
     discord_token: str
     guild_id: int
     welcome_channel_id: int
@@ -24,6 +26,7 @@ class BotConfig:
     domme_role_id: int
     submissive_role_id: int
     moderation_role_id: int
+    event_ban_role_id: int
     leaderboard_channel_id: int
     send_track_channel_id: int
     database_path: Path
@@ -35,7 +38,7 @@ class BotConfig:
 
 _DEFAULT_THRONE_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 TheButlerBot/1.0"
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 RobBot/1.0"
 )
 
 
@@ -69,6 +72,8 @@ def load_config() -> BotConfig:
         raise RuntimeError("Missing required environment variable: DISCORD_TOKEN")
 
     return BotConfig(
+        bot_name=os.getenv("BOT_NAME", "Rob"),
+        event_name=os.getenv("EVENT_NAME", "Mother's Day Event"),
         discord_token=token,
         guild_id=channels.GUILD_ID,
         welcome_channel_id=channels.WELCOME_CHANNEL_ID,
@@ -82,10 +87,11 @@ def load_config() -> BotConfig:
         domme_role_id=channels.DOMME_ROLE_ID,
         submissive_role_id=channels.SUBMISSIVE_ROLE_ID,
         moderation_role_id=channels.MODERATION_ROLE_ID,
+        event_ban_role_id=getattr(channels, "EVENT_BAN_ROLE_ID", 0),
         leaderboard_channel_id=channels.LEADERBOARD_CHANNEL_ID,
         send_track_channel_id=channels.SEND_TRACK_CHANNEL_ID,
         database_path=Path(os.getenv("DATABASE_PATH", "/opt/the-butler/data/the_butler.sqlite3")),
-        throne_poll_interval_seconds=_env_int("THRONE_POLL_INTERVAL_SECONDS", 300, minimum=30),
+        throne_poll_interval_seconds=_env_int("THRONE_POLL_INTERVAL_SECONDS", 60, minimum=30),
         throne_poll_per_domme_delay_seconds=_env_float(
             "THRONE_POLL_PER_DOMME_DELAY_SECONDS", 3.0, minimum=0.0
         ),

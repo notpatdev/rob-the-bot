@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import aiohttp
 
@@ -146,6 +146,42 @@ def normalize_throne_url(throne_url: str) -> str | None:
     return urlunparse(("https", host, path, "", "", ""))
 
 
+def normalize_throne_registration_input(value: str) -> str | None:
+    """Normalize a Domme signup value into a Throne profile URL.
+
+    Accepts either a full Throne URL or a bare username such as ``pattyboy03``
+    or ``@pattyboy03``.
+    """
+    if not value:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if "://" in cleaned or cleaned.startswith("www."):
+        return normalize_throne_url(cleaned)
+
+    username = cleaned.lstrip("@").strip()
+    if not username or any(char.isspace() for char in username):
+        return None
+    return normalize_throne_url(f"https://throne.com/{quote(username, safe='._-')}")
+
+
+async def resolve_creator_id(
+    throne_reference: str,
+    *,
+    http: aiohttp.ClientSession,
+    timeout_seconds: float = 10.0,
+) -> str | None:
+    normalized = normalize_throne_registration_input(throne_reference)
+    if normalized is None:
+        return None
+    return await _resolve_creator_id(
+        normalized,
+        http=http,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 async def fetch_recent_sends(
     throne_url: str,
     *,
@@ -159,42 +195,34 @@ async def fetch_recent_sends(
     request succeeded but there are no visible sends. The polling loop relies
     on this distinction so empty-but-valid overlays are not treated as failures.
     """
+    normalized = normalize_throne_url(throne_url)
+
     overlay_sends = await fetch_recent_overlay_sends(
         throne_url,
         http=http,
         timeout_seconds=timeout_seconds,
     )
-    if overlay_sends is not None:
-        return overlay_sends
+    page_sends: list[ScrapedSend] | None = None
+    should_fetch_page = overlay_sends is None or any(
+        send.amount_usd is None for send in overlay_sends
+    )
 
-    normalized = normalize_throne_url(throne_url)
-    if normalized is None:
+    if normalized is not None and should_fetch_page:
+        page_sends = await _fetch_page_sends(
+            normalized,
+            http=http,
+            user_agent=user_agent,
+            timeout_seconds=timeout_seconds,
+        )
+    elif overlay_sends is None:
         log.warning("Skipping unrecognised Throne URL: %r", throne_url)
         return None
 
-    headers = {
-        "User-Agent": user_agent,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
-    try:
-        async with http.get(normalized, headers=headers, timeout=timeout) as resp:
-            if resp.status != 200:
-                log.warning(
-                    "Throne page %s returned HTTP %s", normalized, resp.status
-                )
-                return None
-            html = await resp.text()
-    except (aiohttp.ClientError, TimeoutError) as exc:
-        log.warning("Failed to fetch Throne page %s: %s", normalized, exc)
-        return None
-
-    try:
-        return parse_sends_from_html(html)
-    except Exception:  # noqa: BLE001 - never let parsing kill the poller
-        log.exception("Failed to parse Throne page %s", normalized)
-        return None
+    if overlay_sends is not None:
+        if page_sends:
+            return _merge_overlay_and_page_sends(overlay_sends, page_sends)
+        return overlay_sends
+    return page_sends
 
 
 async def fetch_recent_overlay_sends(
@@ -235,6 +263,98 @@ async def fetch_recent_overlay_sends(
         sends.append(send)
     sends.sort(key=lambda s: s.sent_at)
     return sends
+
+
+async def _fetch_page_sends(
+    normalized_url: str,
+    *,
+    http: aiohttp.ClientSession,
+    user_agent: str,
+    timeout_seconds: float,
+) -> list[ScrapedSend] | None:
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+    try:
+        async with http.get(normalized_url, headers=headers, timeout=timeout) as resp:
+            if resp.status != 200:
+                log.warning(
+                    "Throne page %s returned HTTP %s", normalized_url, resp.status
+                )
+                return None
+            html = await resp.text()
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        log.warning("Failed to fetch Throne page %s: %s", normalized_url, exc)
+        return None
+
+    try:
+        return parse_sends_from_html(html)
+    except Exception:  # noqa: BLE001 - never let parsing kill the poller
+        log.exception("Failed to parse Throne page %s", normalized_url)
+        return None
+
+
+def _merge_overlay_and_page_sends(
+    overlay_sends: list[ScrapedSend],
+    page_sends: list[ScrapedSend],
+) -> list[ScrapedSend]:
+    """Use page data to enrich overlay rows with prices when possible."""
+    enriched: list[ScrapedSend] = []
+    remaining = page_sends.copy()
+
+    for overlay_send in overlay_sends:
+        best_index: int | None = None
+        best_score = -1
+        for index, page_send in enumerate(remaining):
+            score = _send_match_score(overlay_send, page_send)
+            if score > best_score:
+                best_index = index
+                best_score = score
+
+        if best_index is None or best_score < 2:
+            enriched.append(overlay_send)
+            continue
+
+        matched = remaining.pop(best_index)
+        enriched.append(
+            ScrapedSend(
+                external_id=overlay_send.external_id,
+                sender_name=overlay_send.sender_name or matched.sender_name,
+                amount_usd=matched.amount_usd if matched.amount_usd is not None else overlay_send.amount_usd,
+                item_name=overlay_send.item_name or matched.item_name,
+                item_image_url=overlay_send.item_image_url or matched.item_image_url,
+                sent_at=overlay_send.sent_at,
+            )
+        )
+
+    return enriched
+
+
+def _send_match_score(left: ScrapedSend, right: ScrapedSend) -> int:
+    score = 0
+    if left.sender_name and right.sender_name and left.sender_name.casefold() == right.sender_name.casefold():
+        score += 2
+    elif left.sender_name is None and right.sender_name is None:
+        score += 1
+
+    if left.item_name and right.item_name and left.item_name.casefold() == right.item_name.casefold():
+        score += 2
+
+    try:
+        left_ts = datetime.fromisoformat(left.sent_at.replace("Z", "+00:00"))
+        right_ts = datetime.fromisoformat(right.sent_at.replace("Z", "+00:00"))
+    except ValueError:
+        return score
+
+    delta_seconds = abs((left_ts - right_ts).total_seconds())
+    if delta_seconds <= 60:
+        score += 2
+    elif delta_seconds <= 300:
+        score += 1
+    return score
 
 
 async def _resolve_creator_id(
