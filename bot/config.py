@@ -77,7 +77,11 @@ def load_config() -> BotConfig:
         discord_token=token,
         guild_id=channels.GUILD_ID,
         welcome_channel_id=channels.WELCOME_CHANNEL_ID,
-        verification_channel_id=channels.VERIFICATION_CHANNEL_ID,
+        verification_channel_id=getattr(
+            channels,
+            "REGISTRATION_CHANNEL_ID",
+            channels.VERIFICATION_CHANNEL_ID,
+        ),
         verify_log_channel_id=channels.VERIFY_LOG_CHANNEL_ID,
         general_channel_id=channels.GENERAL_CHANNEL_ID,
         roles_channel_id=channels.ROLES_CHANNEL_ID,
