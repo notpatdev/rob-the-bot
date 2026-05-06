@@ -129,6 +129,8 @@ Prefix commands:
   Checks a user's verification status.
 - `!verify_cleanup`
   Shows users who still have the Unverified role.
+- `!resync [guild|clear|global]`
+  Dev/admin command to re-sync slash commands and clean up duplicate registrations.
 - `!domme`
   Shows your saved Domme profile publicly, or starts profile setup via DM if you don't have one.
 - `!domme @mention`
@@ -136,12 +138,14 @@ Prefix commands:
 - `!domme delete`
   Deletes the saved Domme profile after confirmation.
 
-`!setup_verification`, `!verify_status`, and `!verify_cleanup` require `MODERATION_ROLE_ID` or Administrator.
+`!setup_verification`, `!verify_status`, `!verify_cleanup`, and `!resync` require `MODERATION_ROLE_ID` or Administrator.
 
 Slash commands:
 
 - `/help`
   Shows the restricted bot help menu.
+- `/reaction_role_setup`
+  Moderator-only setup form for creating reaction-role embeds and emoji-to-role mappings.
 - `/domme`
   Shows your saved Domme profile publicly in the channel, or starts profile setup via DM if you don't have one.
 - `/domme user:@Someone`

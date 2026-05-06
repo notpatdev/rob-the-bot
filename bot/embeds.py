@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import discord
 
@@ -32,10 +32,16 @@ PROFILE_COLOR_PRESETS: list[tuple[int, str, str]] = [
 def _styled_embed(
     *,
     title: str,
-    description: str,
+    description: str | None = None,
     color: discord.Color,
+    timestamp: datetime | None = None,
 ) -> discord.Embed:
-    return discord.Embed(title=title, description=description, color=color)
+    return discord.Embed(title=title, description=description, color=color, timestamp=timestamp)
+
+
+def _set_butler_footer(embed: discord.Embed, detail: str) -> None:
+    """Mutate an embed in place to apply the standard Butler footer format."""
+    embed.set_footer(text=f"The Butler • {detail}")
 
 
 def _profile_value(value: str | None) -> str:
@@ -95,7 +101,7 @@ def welcome_embed(member: discord.Member) -> discord.Embed:
         color=PINK,
     )
     embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text="The Butler • 18+ verification required")
+    _set_butler_footer(embed, "18+ verification required")
     return embed
 
 
@@ -105,7 +111,7 @@ def verification_panel_embed() -> discord.Embed:
         description=messages.VERIFICATION_PANEL_DESCRIPTION,
         color=PURPLE,
     )
-    embed.set_footer(text="The Butler • Age verification")
+    _set_butler_footer(embed, "Age verification")
     return embed
 
 
@@ -117,7 +123,7 @@ def initial_verification_dm_embed(notice: str | None = None) -> discord.Embed:
     )
     if notice:
         embed.add_field(name="Invalid Submission", value=notice, inline=False)
-    embed.set_footer(text="The Butler • Verification expires in 5 minutes")
+    _set_butler_footer(embed, "Verification expires in 5 minutes")
     return embed
 
 
@@ -129,7 +135,7 @@ def role_prompt_embed(selected_role: str | None = None) -> discord.Embed:
     )
     if selected_role:
         embed.add_field(name="Selected Role", value=selected_role, inline=False)
-    embed.set_footer(text="The Butler • Role selection")
+    _set_butler_footer(embed, "Role selection")
     return embed
 
 
@@ -139,7 +145,7 @@ def pending_review_embed() -> discord.Embed:
         description=messages.PENDING_REVIEW_DESCRIPTION,
         color=PURPLE,
     )
-    embed.set_footer(text="The Butler • Staff review pending")
+    _set_butler_footer(embed, "Staff review pending")
     return embed
 
 
@@ -153,7 +159,7 @@ def approved_dm_embed(config: BotConfig) -> discord.Embed:
         ),
         color=GREEN,
     )
-    embed.set_footer(text="The Butler • Welcome to The Drain Gang")
+    _set_butler_footer(embed, "Welcome to The Drain Gang")
     return embed
 
 
@@ -163,7 +169,7 @@ def denied_underage_dm_embed() -> discord.Embed:
         description=messages.DENIED_UNDERAGE_DM_DESCRIPTION,
         color=RED,
     )
-    embed.set_footer(text="The Butler • Verification denied")
+    _set_butler_footer(embed, "Verification denied")
     return embed
 
 
@@ -173,7 +179,7 @@ def denied_invalid_dm_embed() -> discord.Embed:
         description=messages.DENIED_INVALID_DM_DESCRIPTION,
         color=ORANGE,
     )
-    embed.set_footer(text="The Butler • Verification denied")
+    _set_butler_footer(embed, "Verification denied")
     return embed
 
 
@@ -183,7 +189,7 @@ def session_expired_dm_embed() -> discord.Embed:
         description=messages.SESSION_EXPIRED_DM_DESCRIPTION,
         color=SOFT_DARK,
     )
-    embed.set_footer(text="The Butler • Verification expired")
+    _set_butler_footer(embed, "Verification expired")
     return embed
 
 
@@ -193,7 +199,7 @@ def invalid_submission_dm_embed() -> discord.Embed:
         description=messages.INVALID_SUBMISSION_DM_DESCRIPTION,
         color=ORANGE,
     )
-    embed.set_footer(text="The Butler • Try again")
+    _set_butler_footer(embed, "Try again")
     return embed
 
 
@@ -207,7 +213,7 @@ def verification_log_embed(
     if request.verification_type == "Photo":
         verification_display = "Photo submitted below."
 
-    embed = discord.Embed(
+    embed = _styled_embed(
         title="New Age Verification Request",
         description=(
             f"**User:** {user_mention(request.user_id)} ({nickname_or_username})\n\n"
@@ -216,13 +222,13 @@ def verification_log_embed(
             f"**User has marked they are a {request.selected_role or 'Unknown'}**"
         ),
         color=PURPLE,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=discord.utils.utcnow(),
     )
     if member:
         embed.set_thumbnail(url=member.display_avatar.url)
     if request.verification_type == "Photo" and request.verification_value:
         embed.set_image(url=request.verification_value)
-    embed.set_footer(text=f"The Butler • Request ID #{request.id}")
+    _set_butler_footer(embed, f"Request ID #{request.id}")
     return embed
 
 
@@ -234,7 +240,7 @@ def verification_outcome_embed(
     color: discord.Color,
     status: str,
 ) -> discord.Embed:
-    embed = discord.Embed(title=title, color=color)
+    embed = _styled_embed(title=title, color=color)
     embed.add_field(
         name="User",
         value=f"{user_mention(request.user_id)} ({request.username})",
@@ -247,7 +253,7 @@ def verification_outcome_embed(
     )
     embed.add_field(
         name="Verification Date",
-        value=datetime.now(timezone.utc).strftime("%m/%d/%Y"),
+        value=discord.utils.utcnow().strftime("%m/%d/%Y"),
         inline=False,
     )
     embed.add_field(
@@ -261,7 +267,7 @@ def verification_outcome_embed(
         inline=False,
     )
     embed.add_field(name="Status", value=status, inline=False)
-    embed.set_footer(text=f"The Butler • Request ID #{request.id}")
+    _set_butler_footer(embed, f"Request ID #{request.id}")
     return embed
 
 
@@ -269,7 +275,7 @@ def verification_status_embed(
     request: VerificationRequest | None,
     user: discord.User | discord.Member,
 ) -> discord.Embed:
-    embed = discord.Embed(title="Verification Status", color=PURPLE)
+    embed = _styled_embed(title="Verification Status", color=PURPLE)
     embed.set_thumbnail(url=user.display_avatar.url)
     embed.add_field(name="User", value=f"{user.mention} ({user.name})", inline=False)
 
@@ -290,7 +296,7 @@ def verification_status_embed(
         embed.add_field(name="Submitted", value=request.submitted_at, inline=False)
         if request.reviewed_at:
             embed.add_field(name="Reviewed", value=request.reviewed_at, inline=False)
-    embed.set_footer(text="The Butler • Staff only")
+    _set_butler_footer(embed, "Staff only")
     return embed
 
 
@@ -299,7 +305,7 @@ def verification_cleanup_embed(
     role: discord.Role,
     members: list[discord.Member],
 ) -> discord.Embed:
-    embed = discord.Embed(title="Unverified Cleanup", color=PURPLE)
+    embed = _styled_embed(title="Unverified Cleanup", color=PURPLE)
     embed.description = f"Users who still have {role.mention}: **{len(members)}**"
     if members:
         visible_members = members[:25]
@@ -309,7 +315,7 @@ def verification_cleanup_embed(
         embed.add_field(name="Members", value="\n".join(lines), inline=False)
     else:
         embed.add_field(name="Members", value="No users currently have this role.", inline=False)
-    embed.set_footer(text="The Butler • Staff only")
+    _set_butler_footer(embed, "Staff only")
     return embed
 
 
@@ -370,6 +376,7 @@ def build_help_pages(
         (
             ("!verify_cleanup", "Shows users who still have the Unverified role."),
             ("/throne_refresh", "Force an immediate Throne poll, optionally for a single Domme."),
+            ("/reaction_role_setup", "Open a setup form to create a reaction-role embed and mappings."),
         ),
     )
     system_page = (
@@ -378,6 +385,7 @@ def build_help_pages(
         "Restricted system controls and reference tools.",
         (
             ("/help", "Shows this help menu."),
+            ("!resync [guild|clear|global]", "Developer/admin command to re-sync slash commands."),
         ),
     )
 
@@ -402,14 +410,50 @@ def help_page_embed(
     # Clamp the page index defensively in case the caller passes a stale value.
     page_index = max(0, min(page_index, len(pages) - 1))
     section, color, blurb, entries = pages[page_index]
-    embed = discord.Embed(
-        title="The Butler Command Guide",
-        description=f"**{section}**\n{blurb}",
+    embed = _styled_embed(
+        title=f"The Butler Help • {section}",
+        description=blurb,
         color=color,
     )
     for name, description in entries:
         embed.add_field(name=name, value=description, inline=False)
-    embed.set_footer(text=f"The Butler • Page {page_index + 1}/{total_pages}")
+    _set_butler_footer(embed, f"Help page {page_index + 1}/{total_pages}")
+    return embed
+
+
+def reaction_role_embed(
+    *,
+    title: str,
+    description: str,
+    color: discord.Color,
+    mappings: list[tuple[str, str]],
+    creator: discord.abc.User,
+) -> discord.Embed:
+    embed = _styled_embed(
+        title=title.strip() or "Reaction Roles",
+        description=description.strip(),
+        color=color,
+        timestamp=discord.utils.utcnow(),
+    )
+    lines = [f"{emoji} = {role_mention}" for emoji, role_mention in mappings]
+    embed.add_field(name="Role Reactions", value="\n".join(lines), inline=False)
+    _set_butler_footer(embed, f"Reaction roles • Setup by {creator.name}")
+    return embed
+
+
+def reaction_role_created_embed(
+    jump_url: str,
+    channel: discord.TextChannel,
+    mappings: list[tuple[str, str, discord.Role]],
+) -> discord.Embed:
+    embed = _styled_embed(
+        title="Reaction-role message created",
+        color=GREEN,
+    )
+    embed.add_field(name="Channel", value=channel.mention, inline=True)
+    embed.add_field(name="Mappings", value=str(len(mappings)), inline=True)
+    embed.add_field(name="Message", value=f"[Jump to message]({jump_url})", inline=False)
+    _set_butler_footer(embed, "Reaction roles ready")
     return embed
 
 
@@ -658,7 +702,7 @@ def domme_profile_embed(
         identity_parts.append(f"**Pronouns:** {profile.pronouns}")
     identity_parts.append("Age Verified ✅" if is_verified else "Age Verified ❌")
 
-    embed = discord.Embed(
+    embed = _styled_embed(
         title=f"✦ {display_name}",
         description="\n".join(identity_parts),
         color=discord.Color(profile.profile_color),
@@ -719,7 +763,7 @@ def domme_profile_embed(
         created_label = created.strftime("%m/%d/%Y")
     except ValueError:
         created_label = profile.created_at
-    embed.set_footer(text=f"The Drain Server • Domme Profile • Created {created_label}")
+    _set_butler_footer(embed, f"Domme profile • Created {created_label}")
     return embed
 
 
@@ -729,13 +773,14 @@ def domme_send_leaderboard_embed(
 ) -> discord.Embed:
     """Personal leaderboard embed shown to a Domme for sends they've received."""
     display_name = member.display_name if isinstance(member, discord.Member) else member.name
-    embed = discord.Embed(
+    embed = _styled_embed(
         title=f"💸 {display_name}'s Sends Leaderboard",
         color=PURPLE,
+        timestamp=discord.utils.utcnow(),
     )
     if not sends:
         embed.description = "No sends recorded yet."
-        embed.set_footer(text="The Drain Server • Throne Tracking")
+        _set_butler_footer(embed, "Throne tracking")
         return embed
 
     # Group by sub using a collision-free prefixed key and count sends.
@@ -781,7 +826,7 @@ def domme_send_leaderboard_embed(
         footer = f"Total sends: {total_count} • Total received: ${total_all:,.2f}"
     else:
         footer = f"Total sends: {total_count}"
-    embed.set_footer(text=f"The Drain Server • {footer}")
+    _set_butler_footer(embed, footer)
     return embed
 
 
@@ -790,14 +835,14 @@ def server_leaderboard_embed(
     bot: discord.Client,
 ) -> discord.Embed:
     """Server-wide leaderboard embed (updated every 5 minutes)."""
-    embed = discord.Embed(
+    embed = _styled_embed(
         title="🏆 Server Sends Leaderboard",
         color=PURPLE,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=discord.utils.utcnow(),
     )
     if not rows:
         embed.description = "No sends recorded yet. Be the first!"
-        embed.set_footer(text="The Drain Server • Updates every 5 minutes")
+        _set_butler_footer(embed, "Leaderboard • Updates every 5 minutes")
         return embed
 
     lines: list[str] = []
@@ -817,7 +862,7 @@ def server_leaderboard_embed(
         lines.append(f"{sub_label} ~ {domme_label}     {score}")
 
     embed.description = "\n".join(lines)
-    embed.set_footer(text="The Drain Server • Updates every 5 minutes")
+    _set_butler_footer(embed, "Leaderboard • Updates every 5 minutes")
     return embed
 
 
@@ -836,10 +881,10 @@ def throne_send_log_embed(
     else:
         sub_label = "*Unclaimed*"
 
-    embed = discord.Embed(
+    embed = _styled_embed(
         title="💸 New Send Received!",
         color=GREEN,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=discord.utils.utcnow(),
     )
     embed.add_field(name="Domme", value=domme_label, inline=True)
     embed.add_field(name="From", value=sub_label, inline=True)
@@ -852,7 +897,7 @@ def throne_send_log_embed(
         embed.add_field(name="Item", value=send.item_name, inline=False)
     if send.item_image_url:
         embed.set_image(url=send.item_image_url)
-    embed.set_footer(text=f"The Drain Server • Send #{send.id}")
+    _set_butler_footer(embed, f"Throne send #{send.id}")
     return embed
 
 
@@ -877,7 +922,7 @@ def sub_profile_embed(
     identity_parts.append("Age Verified ✅" if is_verified else "Age Verified ❌")
 
     color = discord.Color(profile.profile_color) if profile.profile_color else SOFT_DARK
-    embed = discord.Embed(
+    embed = _styled_embed(
         title=f"✦ {display_name}",
         description="\n".join(identity_parts),
         color=color,
@@ -907,7 +952,7 @@ def sub_profile_embed(
         created_label = created.strftime("%m/%d/%Y")
     except ValueError:
         created_label = profile.created_at
-    embed.set_footer(text=f"The Drain Server • Sub Profile • Created {created_label}")
+    _set_butler_footer(embed, f"Sub profile • Created {created_label}")
     return embed
 
 

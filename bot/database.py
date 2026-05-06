@@ -167,100 +167,29 @@ class LeaderboardRow:
 
 
 @dataclass(frozen=True)
-class EventSubTotalRow:
-    user_id: int
-    total_usd: float
-    send_count: int
-
-
-@dataclass(frozen=True)
-class EventDommeTotalRow:
-    user_id: int
-    total_usd: float
-    send_count: int
-
-
-@dataclass(frozen=True)
-class EventDommeRegistration:
-    user_id: int
-    throne_url: str
-    registered_at: str
-
-    @classmethod
-    def from_row(cls, row: aiosqlite.Row) -> "EventDommeRegistration":
-        return cls(
-            user_id=int(row["user_id"]),
-            throne_url=row["throne_url"],
-            registered_at=row["registered_at"],
-        )
-
-
-@dataclass(frozen=True)
-class EventSubRegistration:
-    user_id: int
-    sub_name: str
-    registered_at: str
-
-    @classmethod
-    def from_row(cls, row: aiosqlite.Row) -> "EventSubRegistration":
-        return cls(
-            user_id=int(row["user_id"]),
-            sub_name=row["sub_name"],
-            registered_at=row["registered_at"],
-        )
-
-
-@dataclass(frozen=True)
-class EventState:
-    is_active: bool
-    starts_at: str | None
-    ends_at: str | None
-    ended_at: str | None
-    started_by: int | None
-    ended_by: int | None
-
-    @classmethod
-    def from_row(cls, row: aiosqlite.Row) -> "EventState":
-        return cls(
-            is_active=bool(row["is_active"]),
-            starts_at=row["starts_at"],
-            ends_at=row["ends_at"],
-            ended_at=row["ended_at"],
-            started_by=int(row["started_by"]) if row["started_by"] is not None else None,
-            ended_by=int(row["ended_by"]) if row["ended_by"] is not None else None,
-        )
-
-
-@dataclass(frozen=True)
-class EventSend:
+class ReactionRoleBinding:
     id: int
-    domme_user_id: int
-    sub_name: str | None
-    claimed_sub_user_id: int | None
-    amount_usd: float
-    item_name: str | None
-    item_image_url: str | None
-    logged_by: int
-    sent_at: str
-    external_id: str | None
-    is_private: bool
-    seeded: bool
+    guild_id: int
+    channel_id: int
+    message_id: int
+    emoji_key: str
+    emoji_display: str
+    role_id: int
+    created_by: int
+    created_at: str
 
     @classmethod
-    def from_row(cls, row: aiosqlite.Row) -> "EventSend":
+    def from_row(cls, row: aiosqlite.Row) -> "ReactionRoleBinding":
         return cls(
-            id=int(row["id"]),
-            domme_user_id=int(row["domme_user_id"]),
-            sub_name=row["sub_name"],
-            claimed_sub_user_id=int(row["claimed_sub_user_id"]) if row["claimed_sub_user_id"] is not None else None,
-            amount_usd=float(row["amount_usd"]),
-            item_name=row["item_name"],
-            item_image_url=row["item_image_url"],
-            logged_by=int(row["logged_by"]),
-            sent_at=row["sent_at"],
-            external_id=row["external_id"],
-            is_private=bool(row["is_private"]),
-            seeded=bool(row["seeded"]),
+            id=row["id"],
+            guild_id=row["guild_id"],
+            channel_id=row["channel_id"],
+            message_id=row["message_id"],
+            emoji_key=row["emoji_key"],
+            emoji_display=row["emoji_display"],
+            role_id=row["role_id"],
+            created_by=row["created_by"],
+            created_at=row["created_at"],
         )
 
 
@@ -367,58 +296,24 @@ class Database:
                 channel_id INTEGER NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS event_messages (
-                message_key TEXT PRIMARY KEY,
-                message_id INTEGER NOT NULL,
-                channel_id INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS event_state (
-                event_key TEXT PRIMARY KEY,
-                is_active INTEGER NOT NULL DEFAULT 0,
-                starts_at TEXT,
-                ends_at TEXT,
-                ended_at TEXT,
-                started_by INTEGER,
-                ended_by INTEGER
-            );
-
-            CREATE TABLE IF NOT EXISTS event_dommes (
-                user_id INTEGER PRIMARY KEY,
-                throne_url TEXT NOT NULL,
-                registered_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS event_subs (
-                user_id INTEGER PRIMARY KEY,
-                sub_name TEXT NOT NULL COLLATE NOCASE UNIQUE,
-                registered_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS event_sends (
+            CREATE TABLE IF NOT EXISTS reaction_role_bindings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                domme_user_id INTEGER NOT NULL,
-                sub_name TEXT COLLATE NOCASE,
-                claimed_sub_user_id INTEGER,
-                amount_usd REAL NOT NULL,
-                item_name TEXT,
-                item_image_url TEXT,
-                logged_by INTEGER NOT NULL,
-                sent_at TEXT NOT NULL,
-                external_id TEXT,
-                is_private INTEGER NOT NULL DEFAULT 0,
-                seeded INTEGER NOT NULL DEFAULT 0
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                emoji_key TEXT NOT NULL,
+                emoji_display TEXT NOT NULL,
+                role_id INTEGER NOT NULL,
+                created_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(message_id, emoji_key)
             );
 
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_event_sends_external_id
-            ON event_sends(external_id)
-            WHERE external_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_reaction_role_message
+            ON reaction_role_bindings(message_id);
 
-            CREATE INDEX IF NOT EXISTS idx_event_sends_domme
-            ON event_sends(domme_user_id);
-
-            CREATE INDEX IF NOT EXISTS idx_event_sends_sub
-            ON event_sends(sub_name);
+            CREATE INDEX IF NOT EXISTS idx_reaction_role_role
+            ON reaction_role_bindings(role_id);
 
             UPDATE verification_requests
             SET reviewed_by = NULL
@@ -1078,6 +973,101 @@ class Database:
         ):
             pass
         await self.connection.commit()
+
+    async def upsert_reaction_role_binding(
+        self,
+        *,
+        guild_id: int,
+        channel_id: int,
+        message_id: int,
+        emoji_key: str,
+        emoji_display: str,
+        role_id: int,
+        created_by: int,
+    ) -> None:
+        async with self.connection.execute(
+            """
+            INSERT INTO reaction_role_bindings (
+                guild_id, channel_id, message_id, emoji_key, emoji_display, role_id, created_by, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(message_id, emoji_key) DO UPDATE SET
+                guild_id = excluded.guild_id,
+                channel_id = excluded.channel_id,
+                emoji_display = excluded.emoji_display,
+                role_id = excluded.role_id,
+                created_by = excluded.created_by
+            """,
+            (
+                guild_id,
+                channel_id,
+                message_id,
+                emoji_key,
+                emoji_display,
+                role_id,
+                created_by,
+                _utc_now(),
+            ),
+        ):
+            pass
+        await self.connection.commit()
+
+    async def get_reaction_role_binding(
+        self,
+        *,
+        guild_id: int,
+        message_id: int,
+        emoji_key: str,
+    ) -> ReactionRoleBinding | None:
+        async with self.connection.execute(
+            """
+            SELECT *
+            FROM reaction_role_bindings
+            WHERE guild_id = ? AND message_id = ? AND emoji_key = ?
+            LIMIT 1
+            """,
+            (guild_id, message_id, emoji_key),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return ReactionRoleBinding.from_row(row)
+
+    async def get_reaction_role_bindings_for_message(
+        self,
+        *,
+        guild_id: int,
+        message_id: int,
+    ) -> list[ReactionRoleBinding]:
+        async with self.connection.execute(
+            """
+            SELECT *
+            FROM reaction_role_bindings
+            WHERE guild_id = ? AND message_id = ?
+            ORDER BY id ASC
+            """,
+            (guild_id, message_id),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [ReactionRoleBinding.from_row(row) for row in rows]
+
+    async def remove_reaction_role_binding(
+        self,
+        *,
+        guild_id: int,
+        message_id: int,
+        emoji_key: str,
+    ) -> bool:
+        async with self.connection.execute(
+            """
+            DELETE FROM reaction_role_bindings
+            WHERE guild_id = ? AND message_id = ? AND emoji_key = ?
+            """,
+            (guild_id, message_id, emoji_key),
+        ) as cursor:
+            deleted = cursor.rowcount > 0
+        await self.connection.commit()
+        return deleted
 
     async def get_all_domme_profiles(self) -> list["DommeProfile"]:
         """Return all saved domme profiles, ordered by creation date."""

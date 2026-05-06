@@ -8,7 +8,14 @@ from bot import messages
 from bot.embeds import PROFILE_COLOR_PRESETS, build_help_pages, help_page_embed
 
 if TYPE_CHECKING:
-    from bot.verification import DommeProfileSession, DommeProfileService, SubProfileService, SubProfileSession, VerificationService
+    from bot.verification import (
+        DommeProfileService,
+        DommeProfileSession,
+        ReactionRoleService,
+        SubProfileService,
+        SubProfileSession,
+        VerificationService,
+    )
 
 
 def _clean_optional(value: str) -> str | None:
@@ -161,6 +168,61 @@ class FormLinkView(discord.ui.View):
         )
 
 
+class ReactionRoleSetupModal(discord.ui.Modal, title="Create Reaction Role Message"):
+    def __init__(self, service: "ReactionRoleService", *, default_channel_id: int) -> None:
+        super().__init__(timeout=900)
+        self.service = service
+
+        self.channel_id_input = discord.ui.TextInput(
+            label="Target Channel ID",
+            default=str(default_channel_id),
+            required=True,
+            max_length=30,
+            placeholder="1498996917277954098",
+        )
+        self.title_input = discord.ui.TextInput(
+            label="Embed Title",
+            required=True,
+            max_length=120,
+            placeholder="Choose your roles",
+        )
+        self.description_input = discord.ui.TextInput(
+            label="Embed Description",
+            required=True,
+            max_length=1500,
+            style=discord.TextStyle.paragraph,
+            placeholder="React below to get your roles.",
+        )
+        self.color_input = discord.ui.TextInput(
+            label="Embed Colour (hex, optional)",
+            required=False,
+            max_length=7,
+            placeholder="#B565FF",
+        )
+        self.mappings_input = discord.ui.TextInput(
+            label="Emoji = Role ID or role mention (one per line)",
+            required=True,
+            max_length=1000,
+            style=discord.TextStyle.paragraph,
+            placeholder="💗 = 1498997125739053087\n🔥 = <@&1498997103400194191>\n<:custom:1234567890> = 1498997148845478051",
+        )
+        self.add_item(self.channel_id_input)
+        self.add_item(self.title_input)
+        self.add_item(self.description_input)
+        self.add_item(self.color_input)
+        self.add_item(self.mappings_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.service.create_message_from_modal(
+            interaction=interaction,
+            channel_id_raw=self.channel_id_input.value,
+            title=self.title_input.value,
+            description=self.description_input.value,
+            color_raw=self.color_input.value,
+            mappings_raw=self.mappings_input.value,
+        )
+
+
 class HelpView(discord.ui.View):
     def __init__(
         self,
@@ -174,7 +236,7 @@ class HelpView(discord.ui.View):
         self.total_pages = max(1, len(self.pages))
 
         self.previous_button = discord.ui.Button(
-            label="<",
+            label="Previous",
             style=discord.ButtonStyle.secondary,
             custom_id=f"help:previous:{user_id}",
         )
@@ -189,7 +251,7 @@ class HelpView(discord.ui.View):
         self.add_item(self.page_button)
 
         self.next_button = discord.ui.Button(
-            label=">",
+            label="Next",
             style=discord.ButtonStyle.secondary,
             custom_id=f"help:next:{user_id}",
         )
