@@ -1,76 +1,173 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="https://github.com/patfaint/the-butler.git"
-APP_ROOT="/opt/the-butler"
+REPO_URL="https://github.com/notpatdev/rob-the-bot.git"
+APP_ROOT="/opt/rob-the-bot"
 APP_DIR="${APP_ROOT}/app"
 DATA_DIR="${APP_ROOT}/data"
-LOG_DIR="${APP_ROOT}/logs"
-SERVICE_NAME="the-butler"
-RUNTIME_USER="butlerbot"
+SERVICE_NAME="rob-the-bot"
+SERVICE_FILE="rob-the-bot.service"
+RUNTIME_USER="robbot"
 PYTHON_BIN=""
 
-if [[ "${EUID}" -ne 0 || -z "${SUDO_USER:-}" || "${SUDO_USER}" == "root" ]]; then
-  echo "This installer must be run with sudo by the non-root deploy user."
-  echo "Usage: sudo bash install.sh"
-  exit 1
+if [[ -t 1 ]]; then
+  BOLD="$(printf '\033[1m')"
+  BLUE="$(printf '\033[34m')"
+  GREEN="$(printf '\033[32m')"
+  YELLOW="$(printf '\033[33m')"
+  RESET="$(printf '\033[0m')"
+else
+  BOLD=""
+  BLUE=""
+  GREEN=""
+  YELLOW=""
+  RESET=""
 fi
 
-DEPLOY_OWNER="${SUDO_USER}"
-DEPLOY_GROUP="$(id -gn "${DEPLOY_OWNER}")"
+banner() {
+  echo
+  printf '%s%s%s\n' "${BOLD}" "$1" "${RESET}"
+}
 
-if ! command -v apt-get >/dev/null 2>&1; then
-  echo "This installer currently supports Debian/Ubuntu systems with apt-get."
+step() {
+  printf '%s[%s]%s %s\n' "${BLUE}" "$1" "${RESET}" "$2"
+}
+
+success() {
+  printf '%s[done]%s %s\n' "${GREEN}" "${RESET}" "$1"
+}
+
+note() {
+  printf '%s[note]%s %s\n' "${YELLOW}" "${RESET}" "$1"
+}
+
+die() {
+  printf '%serror:%s %s\n' "${YELLOW}" "${RESET}" "$1" >&2
   exit 1
-fi
+}
 
 prompt_int() {
-  local name="$1"
+  local label="$1"
   local value=""
   while true; do
-    read -r -p "${name}: " value
+    read -r -p "${label}: " value
     if [[ "${value}" =~ ^[0-9]+$ ]]; then
       printf '%s' "${value}"
       return
     fi
-    echo "${name} must be a numeric Discord ID."
+    echo "${label} must be a numeric Discord ID."
   done
 }
 
 prompt_optional_int() {
-  local name="$1"
+  local label="$1"
+  local default="${2:-0}"
   local value=""
   while true; do
-    read -r -p "${name}: " value
-    if [[ -z "${value}" || "${value}" =~ ^[0-9]+$ ]]; then
+    read -r -p "${label} [${default}]: " value
+    if [[ -z "${value}" ]]; then
+      printf '%s' "${default}"
+      return
+    fi
+    if [[ "${value}" =~ ^[0-9]+$ ]]; then
       printf '%s' "${value}"
       return
     fi
-    echo "${name} must be blank or a numeric Discord ID."
+    echo "${label} must be a numeric Discord ID."
   done
 }
 
+prompt_default() {
+  local label="$1"
+  local default="$2"
+  local value=""
+  read -r -p "${label} [${default}]: " value
+  if [[ -z "${value}" ]]; then
+    printf '%s' "${default}"
+  else
+    printf '%s' "${value}"
+  fi
+}
+
 prompt_env_secret() {
-  local name="$1"
+  local label="$1"
   local value=""
   while true; do
-    read -r -s -p "${name}: " value
+    read -r -s -p "${label}: " value
     echo
     if [[ -n "${value}" && "${value}" =~ ^[A-Za-z0-9._-]+$ ]]; then
       printf '%s' "${value}"
       return
     fi
-    echo "${name} must not contain spaces, quotes, #, or shell metacharacters."
+    echo "${label} must not contain spaces, quotes, #, or shell metacharacters."
   done
 }
 
 write_env_line() {
   local name="$1"
   local value="$2"
-  printf '%s=%s\n' "${name}" "${value}"
+  local escaped="${value//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  printf '%s="%s"\n' "${name}" "${escaped}"
 }
 
-echo "Installing system packages..."
+write_channels_py() {
+  local guild_id="$1"
+  local registration_channel_id="$2"
+  local leaderboard_channel_id="$3"
+  local send_track_channel_id="$4"
+  local domme_role_id="$5"
+  local submissive_role_id="$6"
+  local moderation_role_id="$7"
+  local event_ban_role_id="$8"
+
+  cat > "${APP_DIR}/bot/channels.py" <<EOF
+from __future__ import annotations
+
+# ---------------------------------------------------------------------------
+# Server-specific IDs
+# ---------------------------------------------------------------------------
+
+GUILD_ID = ${guild_id}
+
+# --- Channels ---
+WELCOME_CHANNEL_ID = 0
+VERIFICATION_CHANNEL_ID = ${registration_channel_id}
+VERIFY_LOG_CHANNEL_ID = 0
+GENERAL_CHANNEL_ID = 0
+ROLES_CHANNEL_ID = 0
+INTRODUCTIONS_CHANNEL_ID = 0
+LEADERBOARD_CHANNEL_ID = ${leaderboard_channel_id}
+SEND_TRACK_CHANNEL_ID = ${send_track_channel_id}
+
+# --- Roles ---
+UNVERIFIED_ROLE_ID = 0
+VERIFIED_ROLE_ID = 0
+DOMME_ROLE_ID = ${domme_role_id}
+SUBMISSIVE_ROLE_ID = ${submissive_role_id}
+MODERATION_ROLE_ID = ${moderation_role_id}
+EVENT_BAN_ROLE_ID = ${event_ban_role_id}
+EOF
+}
+
+if [[ "${EUID}" -ne 0 || -z "${SUDO_USER:-}" || "${SUDO_USER}" == "root" ]]; then
+  die "Run this installer with sudo from your normal deploy user. Example: sudo bash install.sh"
+fi
+
+DEPLOY_OWNER="${SUDO_USER}"
+DEPLOY_GROUP="$(id -gn "${DEPLOY_OWNER}")"
+DEPLOY_HOME="$(getent passwd "${DEPLOY_OWNER}" | cut -d: -f6)"
+SERVER_HOSTNAME="$(hostname -f 2>/dev/null || hostname)"
+
+if ! command -v apt-get >/dev/null 2>&1; then
+  die "This installer currently supports Debian or Ubuntu systems with apt-get."
+fi
+
+banner "Rob server installer"
+note "This will install the bot to ${APP_ROOT} and run it as ${RUNTIME_USER}."
+note "The deploy user for GitHub Actions will be ${DEPLOY_OWNER}."
+
+step "1/8" "Installing system packages"
 apt-get update
 apt-get install -y git python3 python3-venv python3-pip software-properties-common
 
@@ -93,11 +190,11 @@ import sys
 raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
 PY
 then
-  echo "Python 3.11 or newer is required. Install Python 3.11+ and run this installer again."
-  exit 1
+  die "Python 3.11 or newer is required."
 fi
+success "System packages installed"
 
-echo "Creating runtime user..."
+step "2/8" "Creating runtime user and directories"
 if ! getent group "${RUNTIME_USER}" >/dev/null 2>&1; then
   groupadd --system "${RUNTIME_USER}"
 fi
@@ -106,77 +203,111 @@ if ! id "${RUNTIME_USER}" >/dev/null 2>&1; then
   useradd --system --gid "${RUNTIME_USER}" --home-dir "${APP_ROOT}" --shell /usr/sbin/nologin "${RUNTIME_USER}"
 fi
 
-echo "Creating directories..."
-mkdir -p "${APP_DIR}" "${DATA_DIR}" "${LOG_DIR}"
+mkdir -p "${APP_DIR}" "${DATA_DIR}"
+success "Runtime user and directories ready"
 
-echo "Cloning repository..."
+step "3/8" "Fetching repository"
 if [[ -d "${APP_DIR}/.git" ]]; then
+  git -C "${APP_DIR}" remote set-url origin "${REPO_URL}"
   git -C "${APP_DIR}" fetch origin main
-  git -C "${APP_DIR}" reset --hard origin/main
+  git -C "${APP_DIR}" switch main
+  git -C "${APP_DIR}" pull --ff-only origin main
 else
   rm -rf "${APP_DIR}"
   git clone "${REPO_URL}" "${APP_DIR}"
 fi
+success "Repository ready at ${APP_DIR}"
 
-mkdir -p "${APP_DIR}/data"
-
-echo "Creating Python virtual environment..."
+step "4/8" "Creating virtual environment"
 "${PYTHON_BIN}" -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/python" -m pip install --upgrade pip
 "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt"
+success "Python environment ready"
 
-echo "Enter Discord and server configuration."
+banner "Discord configuration"
+note "You'll enter the IDs Rob needs for the event tracker."
+
 DISCORD_TOKEN="$(prompt_env_secret "DISCORD_TOKEN")"
-GUILD_ID="$(prompt_optional_int "GUILD_ID (optional)")"
-WELCOME_CHANNEL_ID="$(prompt_int "WELCOME_CHANNEL_ID")"
-VERIFICATION_CHANNEL_ID="$(prompt_int "VERIFICATION_CHANNEL_ID")"
-VERIFY_LOG_CHANNEL_ID="$(prompt_int "VERIFY_LOG_CHANNEL_ID")"
-GENERAL_CHANNEL_ID="$(prompt_int "GENERAL_CHANNEL_ID")"
-ROLES_CHANNEL_ID="$(prompt_int "ROLES_CHANNEL_ID")"
-INTRODUCTIONS_CHANNEL_ID="$(prompt_int "INTRODUCTIONS_CHANNEL_ID")"
-UNVERIFIED_ROLE_ID="$(prompt_int "UNVERIFIED_ROLE_ID")"
-VERIFIED_ROLE_ID="$(prompt_int "VERIFIED_ROLE_ID")"
+BOT_NAME="$(prompt_default "BOT_NAME" "Rob")"
+EVENT_NAME="$(prompt_default "EVENT_NAME" "Mother's Day Event")"
+GUILD_ID="$(prompt_int "GUILD_ID")"
+REGISTRATION_CHANNEL_ID="$(prompt_int "REGISTRATION_CHANNEL_ID")"
+LEADERBOARD_CHANNEL_ID="$(prompt_int "LEADERBOARD_CHANNEL_ID")"
+SEND_TRACK_CHANNEL_ID="$(prompt_int "SEND_TRACK_CHANNEL_ID")"
 DOMME_ROLE_ID="$(prompt_int "DOMME_ROLE_ID")"
 SUBMISSIVE_ROLE_ID="$(prompt_int "SUBMISSIVE_ROLE_ID")"
 MODERATION_ROLE_ID="$(prompt_int "MODERATION_ROLE_ID")"
+EVENT_BAN_ROLE_ID="$(prompt_optional_int "EVENT_BAN_ROLE_ID" "0")"
 
+step "5/8" "Writing environment and channel configuration"
 {
   write_env_line "DISCORD_TOKEN" "${DISCORD_TOKEN}"
-  write_env_line "GUILD_ID" "${GUILD_ID}"
-  write_env_line "WELCOME_CHANNEL_ID" "${WELCOME_CHANNEL_ID}"
-  write_env_line "VERIFICATION_CHANNEL_ID" "${VERIFICATION_CHANNEL_ID}"
-  write_env_line "VERIFY_LOG_CHANNEL_ID" "${VERIFY_LOG_CHANNEL_ID}"
-  write_env_line "GENERAL_CHANNEL_ID" "${GENERAL_CHANNEL_ID}"
-  write_env_line "ROLES_CHANNEL_ID" "${ROLES_CHANNEL_ID}"
-  write_env_line "INTRODUCTIONS_CHANNEL_ID" "${INTRODUCTIONS_CHANNEL_ID}"
-  write_env_line "UNVERIFIED_ROLE_ID" "${UNVERIFIED_ROLE_ID}"
-  write_env_line "VERIFIED_ROLE_ID" "${VERIFIED_ROLE_ID}"
-  write_env_line "DOMME_ROLE_ID" "${DOMME_ROLE_ID}"
-  write_env_line "SUBMISSIVE_ROLE_ID" "${SUBMISSIVE_ROLE_ID}"
-  write_env_line "MODERATION_ROLE_ID" "${MODERATION_ROLE_ID}"
-  write_env_line "DATABASE_PATH" "${DATA_DIR}/the_butler.sqlite3"
+  write_env_line "BOT_NAME" "${BOT_NAME}"
+  write_env_line "EVENT_NAME" "${EVENT_NAME}"
+  write_env_line "DATABASE_PATH" "${DATA_DIR}/rob_the_bot.sqlite3"
+  write_env_line "THRONE_POLL_INTERVAL_SECONDS" "60"
 } > "${APP_DIR}/.env"
 
-chmod 600 "${APP_DIR}/.env"
-chown "${RUNTIME_USER}:${RUNTIME_USER}" "${APP_DIR}/.env"
-chown -R "${RUNTIME_USER}:${RUNTIME_USER}" "${DATA_DIR}" "${LOG_DIR}"
-chown -R "${DEPLOY_OWNER}:${DEPLOY_GROUP}" "${APP_DIR}"
-chown -R "${RUNTIME_USER}:${RUNTIME_USER}" "${APP_DIR}/data"
-chown "${RUNTIME_USER}:${RUNTIME_USER}" "${APP_DIR}/.env"
+write_channels_py \
+  "${GUILD_ID}" \
+  "${REGISTRATION_CHANNEL_ID}" \
+  "${LEADERBOARD_CHANNEL_ID}" \
+  "${SEND_TRACK_CHANNEL_ID}" \
+  "${DOMME_ROLE_ID}" \
+  "${SUBMISSIVE_ROLE_ID}" \
+  "${MODERATION_ROLE_ID}" \
+  "${EVENT_BAN_ROLE_ID}"
 
-echo "Installing systemd service..."
-install -m 0644 "${APP_DIR}/the-butler.service" "/etc/systemd/system/${SERVICE_NAME}.service"
+chmod 600 "${APP_DIR}/.env"
+chown -R "${RUNTIME_USER}:${RUNTIME_USER}" "${DATA_DIR}"
+chown -R "${DEPLOY_OWNER}:${DEPLOY_GROUP}" "${APP_DIR}"
+chown "${RUNTIME_USER}:${RUNTIME_USER}" "${APP_DIR}/.env"
+success "Configuration written"
+
+step "6/8" "Installing systemd service"
+install -m 0644 "${APP_DIR}/${SERVICE_FILE}" "/etc/systemd/system/${SERVICE_NAME}.service"
 systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}"
+success "Service installed and started"
 
+step "7/8" "Running quick health check"
+systemctl --no-pager --full status "${SERVICE_NAME}" >/dev/null
+success "systemd reports ${SERVICE_NAME} is available"
+
+step "8/8" "Final setup notes"
 echo
-echo "The Butler is installed."
+printf '%sInstall complete.%s\n' "${GREEN}" "${RESET}"
 echo
-echo "Status command:"
+printf '%sRob service commands%s\n' "${BOLD}" "${RESET}"
 echo "  sudo systemctl status ${SERVICE_NAME}"
-echo
-echo "Logs command:"
+echo "  sudo systemctl restart ${SERVICE_NAME}"
 echo "  sudo journalctl -u ${SERVICE_NAME} -f"
 echo
-echo "Restart command:"
-echo "  sudo systemctl restart ${SERVICE_NAME}"
+printf '%sWhat was written%s\n' "${BOLD}" "${RESET}"
+echo "  App directory: ${APP_DIR}"
+echo "  Database: ${DATA_DIR}/rob_the_bot.sqlite3"
+echo "  Environment file: ${APP_DIR}/.env"
+echo "  Channel config: ${APP_DIR}/bot/channels.py"
+echo
+printf '%sGitHub Actions updater setup%s\n' "${BOLD}" "${RESET}"
+echo "  Repository: notpatdev/rob-the-bot"
+echo "  Branch: main"
+echo "  Deploy path on server: ${APP_DIR}"
+echo "  Service name: ${SERVICE_NAME}"
+echo "  Detected server hostname: ${SERVER_HOSTNAME}"
+echo "  DEPLOY_HOST=<public IP or DNS for this server>"
+echo "  DEPLOY_USER=${DEPLOY_OWNER}"
+echo "  DEPLOY_PORT=22"
+echo "  DEPLOY_SSH_KEY=<paste the private key contents>"
+echo "  DEPLOY_KNOWN_HOSTS=<paste the ssh-keyscan output>"
+echo
+printf '%sRun these on your local machine%s\n' "${BOLD}" "${RESET}"
+echo "  ssh-keygen -t ed25519 -C \"github-actions-deploy\" -f ~/.ssh/rob-the-bot-deploy"
+echo "  cat ~/.ssh/rob-the-bot-deploy.pub"
+echo "  cat ~/.ssh/rob-the-bot-deploy"
+echo "  ssh-keyscan -H YOUR_SERVER_IP_OR_DNS"
+echo
+printf '%sAdd the public key here on the server%s\n' "${BOLD}" "${RESET}"
+echo "  ${DEPLOY_HOME}/.ssh/authorized_keys"
+echo
+note "The bot logs to journald now, so journalctl is the only log view you need."
