@@ -18,18 +18,19 @@ jobs:
           echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
-      - name: Deploy The Butler
+      - name: Deploy Rob
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" <<'EOF'
             set -euo pipefail
-            cd /opt/the-butler/app
-            sudo systemctl stop the-butler
-            trap 'status=$?; if [[ ${status} -ne 0 ]]; then sudo systemctl start the-butler || true; fi; exit ${status}' EXIT
+            cd /opt/rob-the-bot/app
+            sudo systemctl stop rob-the-bot
+            trap 'status=$?; if [[ ${status} -ne 0 ]]; then sudo systemctl start rob-the-bot || true; fi; exit ${status}' EXIT
+            git remote set-url origin https://github.com/notpatdev/rob-the-bot.git
             git pull --ff-only origin main
             ./.venv/bin/python -m pip install --upgrade pip
             ./.venv/bin/pip install -r requirements.txt
-            sudo install -m 0644 the-butler.service /etc/systemd/system/the-butler.service
+            sudo install -m 0644 rob-the-bot.service /etc/systemd/system/rob-the-bot.service
             sudo systemctl daemon-reload
-            sudo systemctl start the-butler
+            sudo systemctl start rob-the-bot
             trap - EXIT
           EOF
