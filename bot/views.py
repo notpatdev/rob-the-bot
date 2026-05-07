@@ -42,7 +42,7 @@ class VerificationPanelView(discord.ui.LayoutView):
         for item in list(self.children):
             if isinstance(item, discord.ui.Container):
                 self.remove_item(item)
-        self.children.insert(0, container)
+        self._children.insert(0, container)
 
     @discord.ui.button(
         label="Verify",
@@ -68,7 +68,7 @@ class RoleSelectionView(discord.ui.LayoutView):
         for item in list(self.children):
             if isinstance(item, discord.ui.Container):
                 self.remove_item(item)
-        self.children.insert(0, container)
+        self._children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
@@ -163,7 +163,7 @@ class StaffReviewView(discord.ui.LayoutView):
         for item in list(self.children):
             if isinstance(item, discord.ui.Container):
                 self.remove_item(item)
-        self.children.insert(0, container)
+        self._children.insert(0, container)
 
     async def _approve(self, interaction: discord.Interaction) -> None:
         if self.service:
@@ -193,7 +193,7 @@ class FormLinkView(discord.ui.LayoutView):
         for item in list(self.children):
             if isinstance(item, discord.ui.Container):
                 self.remove_item(item)
-        self.children.insert(0, container)
+        self._children.insert(0, container)
 
 
 class ReactionRoleSetupModal(discord.ui.Modal, title="Create Reaction Role Message"):
@@ -303,7 +303,7 @@ class HelpView(discord.ui.LayoutView):
                 self.remove_item(item)
         container = help_page_container(self.current_page, self.total_pages, self.pages)
         # Insert container at the beginning (index 0)
-        self.children.insert(0, container)
+        self._children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
@@ -352,7 +352,7 @@ class DommeSetupView(discord.ui.LayoutView):
         for item in list(self.children):
             if isinstance(item, discord.ui.Container):
                 self.remove_item(item)
-        self.children.insert(0, container)
+        self._children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.session.user_id:
@@ -846,7 +846,7 @@ class SubSetupView(discord.ui.LayoutView):
         for item in list(self.children):
             if isinstance(item, discord.ui.Container):
                 self.remove_item(item)
-        self.children.insert(0, container)
+        self._children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.session.user_id:
@@ -1375,7 +1375,7 @@ class ImportIdsConfirmView(discord.ui.LayoutView):
         for item in list(self.children):
             if isinstance(item, discord.ui.Container):
                 self.remove_item(item)
-        self.children.insert(0, container)
+        self._children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self._invoker_id:
@@ -1439,7 +1439,7 @@ class ImportIdsUploadView(discord.ui.LayoutView):
         for item in list(self.children):
             if isinstance(item, discord.ui.Container):
                 self.remove_item(item)
-        self.children.insert(0, container)
+        self._children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self._invoker_id:
