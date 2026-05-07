@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import json as _json
+import pathlib
+import re
 from typing import TYPE_CHECKING
 
 import discord
 
 from bot import messages
-from bot.embeds import PROFILE_COLOR_PRESETS, build_help_pages, help_page_embed
+from bot.embeds import PROFILE_COLOR_PRESETS, build_help_pages, help_page_container
 
 if TYPE_CHECKING:
     from bot.verification import (
@@ -23,16 +27,22 @@ def _clean_optional(value: str) -> str | None:
     return cleaned or None
 
 
-def _disable_all(view: discord.ui.View) -> None:
+def _disable_all(view: discord.ui.View | discord.ui.LayoutView) -> None:
     for item in view.children:
         if hasattr(item, "disabled"):
             item.disabled = True
 
 
-class VerificationPanelView(discord.ui.View):
+class VerificationPanelView(discord.ui.LayoutView):
     def __init__(self, service: VerificationService) -> None:
         super().__init__(timeout=None)
         self.service = service
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self._children.insert(0, container)
 
     @discord.ui.button(
         label="Verify",
@@ -47,12 +57,18 @@ class VerificationPanelView(discord.ui.View):
         await self.service.start_verification(interaction)
 
 
-class RoleSelectionView(discord.ui.View):
+class RoleSelectionView(discord.ui.LayoutView):
     def __init__(self, user_id: int) -> None:
         super().__init__(timeout=300)
         self.user_id = user_id
         self.selection: str | None = None
         self.message: discord.Message | None = None
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self._children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
@@ -94,7 +110,7 @@ class RoleSelectionView(discord.ui.View):
                 pass
 
 
-class StaffReviewView(discord.ui.View):
+class StaffReviewView(discord.ui.LayoutView):
     def __init__(
         self,
         service: VerificationService | None,
@@ -143,6 +159,12 @@ class StaffReviewView(discord.ui.View):
                 )
             )
 
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self._children.insert(0, container)
+
     async def _approve(self, interaction: discord.Interaction) -> None:
         if self.service:
             await self.service.review_request(interaction, self.request_id, "approve")
@@ -156,7 +178,7 @@ class StaffReviewView(discord.ui.View):
             await self.service.review_request(interaction, self.request_id, "deny_invalid")
 
 
-class FormLinkView(discord.ui.View):
+class FormLinkView(discord.ui.LayoutView):
     def __init__(self) -> None:
         super().__init__(timeout=None)
         self.add_item(
@@ -166,6 +188,12 @@ class FormLinkView(discord.ui.View):
                 url=messages.FORM_URL,
             )
         )
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self._children.insert(0, container)
 
 
 class ReactionRoleSetupModal(discord.ui.Modal, title="Create Reaction Role Message"):
@@ -223,7 +251,7 @@ class ReactionRoleSetupModal(discord.ui.Modal, title="Create Reaction Role Messa
         )
 
 
-class HelpView(discord.ui.View):
+class HelpView(discord.ui.LayoutView):
     def __init__(
         self,
         user_id: int,
@@ -266,6 +294,16 @@ class HelpView(discord.ui.View):
         self.close_button.callback = self._close
         self.add_item(self.close_button)
         self._sync_buttons()
+        self._set_container()
+
+    def _set_container(self) -> None:
+        # Remove old container if present and add fresh one at the front
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        container = help_page_container(self.current_page, self.total_pages, self.pages)
+        # Insert container at the beginning (index 0)
+        self._children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
@@ -288,17 +326,14 @@ class HelpView(discord.ui.View):
         _disable_all(self)
         await interaction.response.edit_message(
             content="Help menu closed.",
-            embed=None,
             view=None,
         )
         self.stop()
 
     async def _update(self, interaction: discord.Interaction) -> None:
         self._sync_buttons()
-        await interaction.response.edit_message(
-            embed=help_page_embed(self.current_page, self.total_pages, self.pages),
-            view=self,
-        )
+        self._set_container()
+        await interaction.response.edit_message(view=self)
 
     def _sync_buttons(self) -> None:
         self.previous_button.disabled = self.current_page == 0
@@ -306,11 +341,18 @@ class HelpView(discord.ui.View):
         self.page_button.label = f"Page {self.current_page + 1}/{self.total_pages}"
 
 
-class DommeSetupView(discord.ui.View):
+class DommeSetupView(discord.ui.LayoutView):
     def __init__(self, service: DommeProfileService, session: DommeProfileSession) -> None:
         super().__init__(timeout=900)
         self.service = service
         self.session = session
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        """Replace any existing container with the new one at the front."""
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self._children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.session.user_id:
@@ -348,8 +390,7 @@ class DommeSetupIntroView(DommeSetupView):
     ) -> None:
         self.service.finish_session(self.session.user_id)
         await interaction.response.edit_message(
-            embed=self.service.build_later_embed(),
-            view=None,
+            view=self.service.build_later_view(),
         )
         self.stop()
 
@@ -537,8 +578,7 @@ class DommeSetupReviewView(DommeSetupView):
     ) -> None:
         self.service.finish_session(self.session.user_id)
         await interaction.response.edit_message(
-            embed=self.service.build_cancelled_embed(),
-            view=None,
+            view=self.service.build_cancelled_view(),
         )
         self.stop()
 
@@ -795,11 +835,18 @@ class DommeContentLinksModal(discord.ui.Modal, title="Content Links"):
 # Sub profile setup views and modals
 # ---------------------------------------------------------------------------
 
-class SubSetupView(discord.ui.View):
+class SubSetupView(discord.ui.LayoutView):
     def __init__(self, service: SubProfileService, session: SubProfileSession) -> None:
         super().__init__(timeout=900)
         self.service = service
         self.session = session
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        """Replace any existing container with the new one at the front."""
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self._children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.session.user_id:
@@ -837,8 +884,7 @@ class SubSetupIntroView(SubSetupView):
     ) -> None:
         self.service.finish_session(self.session.user_id)
         await interaction.response.edit_message(
-            embed=self.service.build_later_embed(),
-            view=None,
+            view=self.service.build_later_view(),
         )
         self.stop()
 
@@ -886,8 +932,7 @@ class SubSetupReviewView(SubSetupView):
     ) -> None:
         self.service.finish_session(self.session.user_id)
         await interaction.response.edit_message(
-            embed=self.service.build_cancelled_embed(),
-            view=None,
+            view=self.service.build_cancelled_view(),
         )
         self.stop()
 
@@ -1158,3 +1203,329 @@ class SubSetupOwnerView(SubSetupView):
         _: discord.ui.Button,
     ) -> None:
         await self.service.show_color_step(self.session, interaction)
+
+
+# ---------------------------------------------------------------------------
+# !import ids — file-upload flow to configure channel/role IDs in-Discord
+# ---------------------------------------------------------------------------
+
+_IMPORT_FIELD_NAMES = (
+    "GUILD_ID",
+    "REGISTRATION_CHANNEL_ID",
+    "LEADERBOARD_CHANNEL_ID",
+    "SEND_TRACK_CHANNEL_ID",
+    "DOMME_ROLE_ID",
+    "SUBMISSIVE_ROLE_ID",
+    "MODERATION_ROLE_ID",
+    "EVENT_BAN_ROLE_ID",
+)
+
+_OPTIONAL_IMPORT_FIELDS = {"EVENT_BAN_ROLE_ID"}
+
+_IMPORT_IDS_BUTTON_TIMEOUT_SECONDS = 300
+_IMPORT_IDS_UPLOAD_TIMEOUT_SECONDS = 120
+_IMPORT_IDS_CONFIRM_TIMEOUT_SECONDS = 120
+
+_DIGITS_ONLY_RE = re.compile(r"\d+")
+
+_CHANNELS_PY_TEMPLATE = """\
+from __future__ import annotations
+
+GUILD_ID = {GUILD_ID}
+
+REGISTRATION_CHANNEL_ID = {REGISTRATION_CHANNEL_ID}
+LEADERBOARD_CHANNEL_ID = {LEADERBOARD_CHANNEL_ID}
+SEND_TRACK_CHANNEL_ID = {SEND_TRACK_CHANNEL_ID}
+
+DOMME_ROLE_ID = {DOMME_ROLE_ID}
+SUBMISSIVE_ROLE_ID = {SUBMISSIVE_ROLE_ID}
+MODERATION_ROLE_ID = {MODERATION_ROLE_ID}
+EVENT_BAN_ROLE_ID = {EVENT_BAN_ROLE_ID}
+"""
+
+# Fuzzy aliases: lowercase fragment → canonical field name
+_IMPORT_ALIASES: dict[str, str] = {
+    "guild":                    "GUILD_ID",
+    "guild_id":                 "GUILD_ID",
+    "server":                   "GUILD_ID",
+    "server_id":                "GUILD_ID",
+    "registration":             "REGISTRATION_CHANNEL_ID",
+    "registration_channel":     "REGISTRATION_CHANNEL_ID",
+    "reg":                      "REGISTRATION_CHANNEL_ID",
+    "verify_channel":           "REGISTRATION_CHANNEL_ID",
+    "verification_channel":     "REGISTRATION_CHANNEL_ID",
+    "leaderboard":              "LEADERBOARD_CHANNEL_ID",
+    "leaderboard_channel":      "LEADERBOARD_CHANNEL_ID",
+    "lb":                       "LEADERBOARD_CHANNEL_ID",
+    "lb_channel":               "LEADERBOARD_CHANNEL_ID",
+    "send_track":               "SEND_TRACK_CHANNEL_ID",
+    "send_track_channel":       "SEND_TRACK_CHANNEL_ID",
+    "sends":                    "SEND_TRACK_CHANNEL_ID",
+    "sends_channel":            "SEND_TRACK_CHANNEL_ID",
+    "track":                    "SEND_TRACK_CHANNEL_ID",
+    "track_channel":            "SEND_TRACK_CHANNEL_ID",
+    "domme":                    "DOMME_ROLE_ID",
+    "domme_role":               "DOMME_ROLE_ID",
+    "dom":                      "DOMME_ROLE_ID",
+    "dom_role":                 "DOMME_ROLE_ID",
+    "submissive":               "SUBMISSIVE_ROLE_ID",
+    "submissive_role":          "SUBMISSIVE_ROLE_ID",
+    "sub":                      "SUBMISSIVE_ROLE_ID",
+    "sub_role":                 "SUBMISSIVE_ROLE_ID",
+    "moderation":               "MODERATION_ROLE_ID",
+    "moderation_role":          "MODERATION_ROLE_ID",
+    "mod":                      "MODERATION_ROLE_ID",
+    "mod_role":                 "MODERATION_ROLE_ID",
+    "staff":                    "MODERATION_ROLE_ID",
+    "staff_role":               "MODERATION_ROLE_ID",
+    "event_ban":                "EVENT_BAN_ROLE_ID",
+    "event_ban_role":           "EVENT_BAN_ROLE_ID",
+    "ban_role":                 "EVENT_BAN_ROLE_ID",
+    "eventban":                 "EVENT_BAN_ROLE_ID",
+}
+
+
+def _resolve_key(raw_key: str) -> str | None:
+    """Map a raw key from a file to a canonical _IMPORT_FIELD_NAMES entry."""
+    normalised = raw_key.strip().lower().replace("-", "_").replace(" ", "_")
+    without_id = normalised.removesuffix("_id")
+    # Exact match against canonical names (uppercase)
+    if normalised.upper() in _IMPORT_FIELD_NAMES:
+        return normalised.upper()
+    # Alias lookup
+    if normalised in _IMPORT_ALIASES:
+        return _IMPORT_ALIASES[normalised]
+    if without_id in _IMPORT_ALIASES:
+        return _IMPORT_ALIASES[without_id]
+    return None
+
+
+def _parse_ids_file(content: str, filename: str) -> tuple[dict[str, int], list[str]]:
+    """Parse a JSON or text file and return (parsed_ids, warnings)."""
+    parsed: dict[str, int] = {}
+    warnings: list[str] = []
+    raw_pairs: list[tuple[str, str]] = []
+
+    # --- try JSON first ---
+    if filename.lower().endswith(".json") or content.lstrip().startswith("{"):
+        try:
+            data = _json.loads(content)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    raw_pairs.append((str(k), str(v)))
+            else:
+                warnings.append("JSON is not a top-level object — falling back to text parsing.")
+                raw_pairs = []  # ensure text parser runs
+        except _json.JSONDecodeError:
+            warnings.append("File looks like JSON but couldn't be parsed — trying text mode.")
+
+    # --- text parsing (KEY=VALUE or KEY: VALUE) ---
+    if not raw_pairs:
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("//"):
+                continue
+            # Try = then :
+            if "=" in line:
+                key, _, value = line.partition("=")
+            elif ":" in line:
+                key, _, value = line.partition(":")
+            else:
+                continue
+            raw_pairs.append((key.strip(), value.strip().strip('"').strip("'")))
+
+    # --- resolve and validate each pair ---
+    for raw_key, raw_value in raw_pairs:
+        canonical = _resolve_key(raw_key)
+        if canonical is None:
+            warnings.append(f"Unknown key `{raw_key}` — skipped.")
+            continue
+        # Strip quotes / whitespace
+        value_clean = raw_value.strip().strip('"').strip("'")
+        if not _DIGITS_ONLY_RE.fullmatch(value_clean):
+            warnings.append(f"`{canonical}` — expected a numeric ID, got `{value_clean}`.")
+            continue
+        if canonical in parsed:
+            warnings.append(f"`{canonical}` appeared more than once — kept first value.")
+            continue
+        parsed[canonical] = int(value_clean)
+
+    return parsed, warnings
+
+
+def _write_channels_py(parsed: dict[str, int]) -> str | None:
+    """Write channels.py from parsed IDs. Returns error message or None on success."""
+    channels_path = pathlib.Path(__file__).parent / "channels.py"
+    try:
+        channels_path.write_text(_CHANNELS_PY_TEMPLATE.format(**parsed), encoding="utf-8")
+    except OSError as exc:
+        return str(exc)
+    return None
+
+
+class ImportIdsConfirmView(discord.ui.LayoutView):
+    """Confirm / Cancel buttons shown after the file is parsed."""
+
+    def __init__(self, parsed: dict[str, int], *, invoker_id: int) -> None:
+        super().__init__(timeout=_IMPORT_IDS_CONFIRM_TIMEOUT_SECONDS)
+        self._parsed = parsed
+        self._invoker_id = invoker_id
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self._children.insert(0, container)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self._invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the person who ran `!import ids` can confirm this.",
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        _disable_all(self)
+        # Remove container when showing just a result message
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        err = _write_channels_py(self._parsed)
+        if err:
+            await interaction.response.edit_message(
+                content=f"❌ Could not write `channels.py`: {err}",
+                view=self,
+            )
+        else:
+            await interaction.response.edit_message(
+                content="✅ **`channels.py` saved!** Restart the bot to apply.",
+                view=self,
+            )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✗")
+    async def cancel(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        _disable_all(self)
+        # Remove container when showing just a result message
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        await interaction.response.edit_message(
+            content="Import cancelled — nothing was saved.",
+            view=self,
+        )
+        self.stop()
+
+
+class ImportIdsUploadView(discord.ui.LayoutView):
+    """Container button — starts the file-upload flow when clicked."""
+
+    def __init__(self, *, invoker_id: int) -> None:
+        super().__init__(timeout=_IMPORT_IDS_BUTTON_TIMEOUT_SECONDS)
+        self._invoker_id = invoker_id
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self._children.insert(0, container)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self._invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the person who ran `!import ids` can use this.",
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(label="Upload File", style=discord.ButtonStyle.primary, emoji="📂")
+    async def upload_file(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        await interaction.response.send_message(
+            f"📎 Upload your `.json` or `.txt` file as an attachment in this channel.\n"
+            f"You have {_IMPORT_IDS_UPLOAD_TIMEOUT_SECONDS} seconds.",
+            ephemeral=True,
+        )
+        self.stop()
+        _disable_all(self)
+
+        def check(m: discord.Message) -> bool:
+            return (
+                m.author.id == interaction.user.id
+                and m.channel.id == (interaction.channel_id or 0)
+                and bool(m.attachments)
+            )
+
+        try:
+            msg: discord.Message = await interaction.client.wait_for(
+                "message",
+                check=check,
+                timeout=_IMPORT_IDS_UPLOAD_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            await interaction.followup.send(
+                "⏱️ Timed out waiting for a file upload.",
+                ephemeral=True,
+            )
+            return
+
+        attachment = msg.attachments[0]
+        # Silently clean up the upload message so the channel stays tidy
+        try:
+            await msg.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+        try:
+            raw_bytes = await attachment.read()
+            content = raw_bytes.decode("utf-8", errors="replace")
+        except discord.HTTPException as exc:
+            await interaction.followup.send(
+                f"❌ Could not read the file: {exc}",
+                ephemeral=True,
+            )
+            return
+
+        parsed, warnings = _parse_ids_file(content, attachment.filename)
+
+        # Check required fields are present
+        missing = [
+            f for f in _IMPORT_FIELD_NAMES
+            if f not in parsed and f not in _OPTIONAL_IMPORT_FIELDS
+        ]
+        if missing:
+            await interaction.followup.send(
+                f"❌ Could not find the following required IDs in your file:\n"
+                + "\n".join(f"• `{f}`" for f in missing)
+                + "\n\nCheck the field names and try again.",
+                ephemeral=True,
+            )
+            return
+
+        # Fill optional fields with 0 if absent
+        for field in _OPTIONAL_IMPORT_FIELDS:
+            parsed.setdefault(field, 0)
+
+        from bot.embeds import import_ids_confirm_container  # local to avoid circular import
+
+        confirm_view = ImportIdsConfirmView(parsed, invoker_id=interaction.user.id)
+        confirm_view._set_container(import_ids_confirm_container(parsed, warnings))
+        await interaction.followup.send(
+            view=confirm_view,
+            ephemeral=True,
+        )
