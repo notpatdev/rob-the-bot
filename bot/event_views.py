@@ -168,7 +168,9 @@ class LeaderboardView(discord.ui.LayoutView):
                     else "No named loose sends right now. Rob is almost disappointed."
                 ),
             ]
-        raise ValueError("Unsupported leaderboard registration type.")
+        raise ValueError(
+            f"Unsupported leaderboard registration type: {register_kind!r}. Expected 'domme' or 'sub'."
+        )
 
     async def _open_register_modal(self, interaction: discord.Interaction) -> None:
         if self.cog is None or self.register_kind is None:
@@ -215,10 +217,10 @@ class SendNotificationView(discord.ui.LayoutView):
         if item_name:
             sections.append(text_block(f"**Item**\n{item_name}"))
 
-        fallout_lines = [f"Domme total sends: **{domme_send_count}**"]
+        summary_lines = [f"Domme total sends: **{domme_send_count}**"]
         if sub_rank is not None:
-            fallout_lines.insert(0, f"{rank_label}: **#{sub_rank}**")
-        sections.extend([separator(), text_block("**Leaderboard fallout**\n" + "\n".join(fallout_lines))])
+            summary_lines.insert(0, f"{rank_label}: **#{sub_rank}**")
+        sections.extend([separator(), text_block("**Leaderboard fallout**\n" + "\n".join(summary_lines))])
 
         self.add_item(
             make_container(

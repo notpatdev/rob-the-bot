@@ -450,7 +450,7 @@ class Database:
                   {where_sql}
             )
             SELECT
-                sub_name,
+                MIN(sub_name) AS sub_name,
                 SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END) AS total_usd,
                 COUNT(*) AS send_count
             FROM trimmed_sends
