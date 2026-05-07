@@ -17,7 +17,7 @@
         "leaderboard_title": "Mother's Day Event",
         "send_title": "Mother's Day Send"
       },
-      "enabled": false,
+      "enabled": true,
       "start_at": null,
       "end_at": null,
       "timezone": "Australia/Sydney"
