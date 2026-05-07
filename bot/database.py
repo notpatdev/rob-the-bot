@@ -448,8 +448,8 @@ class Database:
               AND sub_name IS NOT NULL
               AND TRIM(sub_name) != ''
             {where_sql}
-            GROUP BY sub_name COLLATE NOCASE
-            ORDER BY total_usd DESC, send_count DESC, sub_name COLLATE NOCASE ASC
+            GROUP BY TRIM(sub_name) COLLATE NOCASE
+            ORDER BY total_usd DESC, send_count DESC, TRIM(sub_name) COLLATE NOCASE ASC
             LIMIT ?
         """
         async with self.connection.execute(query, (*params, limit)) as cursor:

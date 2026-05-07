@@ -126,6 +126,8 @@ class LeaderboardView(discord.ui.LayoutView):
                         else "No named loose sends right now. Rob is almost disappointed."
                     ),
                 ]
+            else:
+                raise ValueError(f"Unsupported leaderboard register kind: {register_kind}")
 
         sections: list[discord.ui.Item] = [
             separator(),
@@ -156,7 +158,10 @@ class LeaderboardView(discord.ui.LayoutView):
         if self.register_kind == "domme":
             await interaction.response.send_modal(DommeSignupModal(self.cog))
             return
-        await interaction.response.send_modal(SubSignupModal(self.cog))
+        if self.register_kind == "sub":
+            await interaction.response.send_modal(SubSignupModal(self.cog))
+            return
+        await interaction.response.send_message("Rob lost track of that button. Try again in a sec.", ephemeral=True)
 
 
 class SendNotificationView(discord.ui.LayoutView):
