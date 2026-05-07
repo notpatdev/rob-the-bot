@@ -18,9 +18,9 @@
         "send_title": "Mother's Day Send"
       },
       "enabled": true,
-      "start_at": null,
-      "end_at": null,
-      "timezone": "Australia/Sydney"
+      "start_at": "2026-05-09T14:00:00Z",
+      "end_at": "2026-05-10T14:00:00Z",
+      "timezone": "UTC"
     }
   ]
 }
