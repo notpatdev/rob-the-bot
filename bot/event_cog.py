@@ -514,10 +514,10 @@ class RobEventCog(commands.Cog):
 
         status_lines = self._leaderboard_status_lines(context)
         domme_helper = [
-            "Click the button above and hand Rob your Throne link. He cannot track sends by spiritual connection."
+            "Use the Link Throne button and hand Rob your Throne link. He cannot track sends by spiritual connection."
         ]
         sub_helper = [
-            "Click the button above and give Rob your exact Throne sending name. Then he does the maths and fixes your rank."
+            "Use the Claim Sends button and give Rob your exact Throne sending name. Then he does the maths and fixes your rank."
         ]
 
         domme_view = LeaderboardView(

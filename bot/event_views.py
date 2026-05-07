@@ -105,19 +105,14 @@ class LeaderboardView(discord.ui.LayoutView):
             )
             register_button.callback = self._open_register_modal
 
-        sections: list[discord.ui.Item] = [
-            separator(),
-            text_block(f"### {board_title}\n\n" + "\n".join(status_lines)),
-        ]
+        pre_rows_sections: list[discord.ui.Item] = []
+        post_rows_sections: list[discord.ui.Item] = []
         if register_button is not None and register_section_text:
-            sections.append(separator())
             if register_kind == "domme":
-                sections.append(action_section(register_section_text, register_button))
-        sections.extend([separator(), text_block(_render_rows(rows) if rows else empty_message)])
-        if register_button is not None and register_section_text and register_kind == "sub":
-            display_unclaimed_total = unclaimed_total if unclaimed_total is not None else "$0.00"
-            sections.extend(
-                [
+                pre_rows_sections = [separator(), action_section(register_section_text, register_button)]
+            elif register_kind == "sub":
+                display_unclaimed_total = unclaimed_total if unclaimed_total is not None else "$0.00"
+                post_rows_sections = [
                     separator(),
                     action_section(
                         "### Unclaimed Sends\n\n"
@@ -131,7 +126,15 @@ class LeaderboardView(discord.ui.LayoutView):
                         else "No named loose sends right now. Rob is almost disappointed."
                     ),
                 ]
-            )
+
+        sections: list[discord.ui.Item] = [
+            separator(),
+            text_block(f"### {board_title}\n\n" + "\n".join(status_lines)),
+            *pre_rows_sections,
+            separator(),
+            text_block(_render_rows(rows) if rows else empty_message),
+            *post_rows_sections,
+        ]
         if helper_lines:
             sections.extend([separator()])
             sections.extend(subtle(line) for line in helper_lines if line)
