@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pathlib
+import re
 from typing import TYPE_CHECKING
 
 import discord
@@ -1158,3 +1160,126 @@ class SubSetupOwnerView(SubSetupView):
         _: discord.ui.Button,
     ) -> None:
         await self.service.show_color_step(self.session, interaction)
+
+
+# ---------------------------------------------------------------------------
+# !import ids — admin modal to configure channel/role IDs in-Discord
+# ---------------------------------------------------------------------------
+
+_IMPORT_FIELD_NAMES = (
+    "GUILD_ID",
+    "REGISTRATION_CHANNEL_ID",
+    "LEADERBOARD_CHANNEL_ID",
+    "SEND_TRACK_CHANNEL_ID",
+    "DOMME_ROLE_ID",
+    "SUBMISSIVE_ROLE_ID",
+    "MODERATION_ROLE_ID",
+    "EVENT_BAN_ROLE_ID",
+)
+
+_CHANNELS_PY_TEMPLATE = """\
+from __future__ import annotations
+
+GUILD_ID = {GUILD_ID}
+
+REGISTRATION_CHANNEL_ID = {REGISTRATION_CHANNEL_ID}
+LEADERBOARD_CHANNEL_ID = {LEADERBOARD_CHANNEL_ID}
+SEND_TRACK_CHANNEL_ID = {SEND_TRACK_CHANNEL_ID}
+
+DOMME_ROLE_ID = {DOMME_ROLE_ID}
+SUBMISSIVE_ROLE_ID = {SUBMISSIVE_ROLE_ID}
+MODERATION_ROLE_ID = {MODERATION_ROLE_ID}
+EVENT_BAN_ROLE_ID = {EVENT_BAN_ROLE_ID}
+"""
+
+
+class ImportIdsModal(discord.ui.Modal, title="Import Server IDs"):
+    """Admin modal — paste KEY=VALUE pairs to update channels.py."""
+
+    ids_input: discord.ui.TextInput = discord.ui.TextInput(
+        label="Paste your IDs below (KEY=value, one per line)",
+        style=discord.TextStyle.paragraph,
+        placeholder=(
+            "GUILD_ID=123456789\n"
+            "REGISTRATION_CHANNEL_ID=123456789\n"
+            "LEADERBOARD_CHANNEL_ID=123456789\n"
+            "SEND_TRACK_CHANNEL_ID=123456789\n"
+            "DOMME_ROLE_ID=123456789\n"
+            "SUBMISSIVE_ROLE_ID=123456789\n"
+            "MODERATION_ROLE_ID=123456789\n"
+            "EVENT_BAN_ROLE_ID=0"
+        ),
+        required=True,
+        max_length=2000,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = self.ids_input.value or ""
+        parsed: dict[str, int] = {}
+        errors: list[str] = []
+
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                errors.append(f"Skipped (no `=`): `{line}`")
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip().upper()
+            value = value.strip().strip('"').strip("'")
+            if key not in _IMPORT_FIELD_NAMES:
+                errors.append(f"Unknown key `{key}` — ignored.")
+                continue
+            if not re.fullmatch(r"\d+", value):
+                errors.append(f"`{key}` must be a numeric ID — got `{value}`.")
+                continue
+            parsed[key] = int(value)
+
+        missing = [f for f in _IMPORT_FIELD_NAMES if f not in parsed and f != "EVENT_BAN_ROLE_ID"]
+        if missing:
+            await interaction.response.send_message(
+                f"❌ Missing required fields: {', '.join(f'`{f}`' for f in missing)}",
+                ephemeral=True,
+            )
+            return
+
+        # Fill optional field with 0 if omitted
+        parsed.setdefault("EVENT_BAN_ROLE_ID", 0)
+
+        channels_path = pathlib.Path(__file__).parent / "channels.py"
+        try:
+            channels_path.write_text(_CHANNELS_PY_TEMPLATE.format(**parsed), encoding="utf-8")
+        except OSError as exc:
+            await interaction.response.send_message(
+                f"❌ Could not write `channels.py`: {exc}",
+                ephemeral=True,
+            )
+            return
+
+        lines = [f"`{k}` → `{v}`" for k, v in parsed.items()]
+        warning = ""
+        if errors:
+            warning = "\n\n⚠️ Warnings:\n" + "\n".join(errors)
+        await interaction.response.send_message(
+            f"✅ **`channels.py` updated!** Restart the bot to apply.\n\n"
+            + "\n".join(lines)
+            + warning,
+            ephemeral=True,
+        )
+
+
+class _ImportIdsTriggerView(discord.ui.View):
+    """Ephemeral button that opens ImportIdsModal (needed for prefix commands)."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+
+    @discord.ui.button(label="Open ID Form", style=discord.ButtonStyle.primary, emoji="📋")
+    async def open_form(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        await interaction.response.send_modal(ImportIdsModal())
+        self.stop()

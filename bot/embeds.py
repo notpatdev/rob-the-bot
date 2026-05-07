@@ -385,6 +385,7 @@ def build_help_pages(
         "Restricted system controls and reference tools.",
         (
             ("/help", "Shows this help menu."),
+            ("!import ids", "Opens a form to paste your server's channel and role IDs — updates channels.py."),
             ("!resync [guild|clear|global]", "Developer/admin command to re-sync slash commands."),
         ),
     )
@@ -692,33 +693,28 @@ def domme_profile_embed(
 ) -> discord.Embed:
     display_name = member.display_name if isinstance(member, discord.Member) else member.name
 
-    # Build identity description — only include fields with values
-    identity_parts: list[str] = []
+    # Build a clean description block
+    desc_parts: list[str] = []
     if _has_value(profile.honorific):
-        identity_parts.append(f"**Honorific:** {profile.honorific}")
+        desc_parts.append(f"**Honorific:** {profile.honorific}")
     if _has_value(profile.name):
-        identity_parts.append(f"**Name:** {profile.name}")
+        desc_parts.append(f"**Name:** {profile.name}")
     if _has_value(profile.pronouns):
-        identity_parts.append(f"**Pronouns:** {profile.pronouns}")
-    identity_parts.append("Age Verified ✅" if is_verified else "Age Verified ❌")
+        desc_parts.append(f"**Pronouns:** {profile.pronouns}")
+    if _has_value(profile.age):
+        desc_parts.append(f"**Age:** {profile.age}")
+    if _has_value(profile.tribute_price):
+        desc_parts.append(f"**Tribute:** {profile.tribute_price}")
+    desc_parts.append("Age Verified ✅" if is_verified else "Age Verified ❌")
 
     embed = _styled_embed(
         title=f"✦ {display_name}",
-        description="\n".join(identity_parts),
+        description="\n".join(desc_parts),
         color=discord.Color(profile.profile_color),
     )
     embed.set_thumbnail(url=member.display_avatar.url)
 
-    # Details — only show if at least one is set
-    details_parts: list[str] = []
-    if _has_value(profile.age):
-        details_parts.append(f"**Age:** {profile.age}")
-    if _has_value(profile.tribute_price):
-        details_parts.append(f"**Tribute:** {profile.tribute_price}")
-    if details_parts:
-        embed.add_field(name="Details", value="\n".join(details_parts), inline=False)
-
-    # Throne — shown separately at the top of links
+    # Throne — shown as its own field since it's a link
     if _has_value(profile.throne):
         embed.add_field(name="Throne", value=profile.throne, inline=False)
 
@@ -881,20 +877,25 @@ def throne_send_log_embed(
     else:
         sub_label = "*Unclaimed*"
 
+    if send.is_private:
+        amount_str = "*Private*"
+    else:
+        amount_str = f"**${send.amount_usd:,.2f}**"
+
+    desc_lines = [
+        f"**To:** {domme_label}",
+        f"**From:** {sub_label}",
+        f"**Amount:** {amount_str}",
+    ]
+    if send.item_name:
+        desc_lines.append(f"**Item:** {send.item_name}")
+
     embed = _styled_embed(
         title="💸 New Send Received!",
+        description="\n".join(desc_lines),
         color=GREEN,
         timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(name="Domme", value=domme_label, inline=True)
-    embed.add_field(name="From", value=sub_label, inline=True)
-    if send.is_private:
-        amount_value = "*Private*"
-    else:
-        amount_value = f"**${send.amount_usd:,.2f}**"
-    embed.add_field(name="Amount", value=amount_value, inline=True)
-    if send.item_name:
-        embed.add_field(name="Item", value=send.item_name, inline=False)
     if send.item_image_url:
         embed.set_image(url=send.item_image_url)
     _set_butler_footer(embed, f"Throne send #{send.id}")
@@ -911,36 +912,34 @@ def sub_profile_embed(
 ) -> discord.Embed:
     display_name = member.display_name if isinstance(member, discord.Member) else member.name
 
-    # Build description with identity fields
-    identity_parts: list[str] = []
+    # Build a clean description block
+    desc_parts: list[str] = []
     if _has_value(profile.name):
-        identity_parts.append(f"**Name:** {profile.name}")
+        desc_parts.append(f"**Name:** {profile.name}")
     if _has_value(profile.pronouns):
-        identity_parts.append(f"**Pronouns:** {profile.pronouns}")
+        desc_parts.append(f"**Pronouns:** {profile.pronouns}")
     if _has_value(profile.age):
-        identity_parts.append(f"**Age:** {profile.age}")
-    identity_parts.append("Age Verified ✅" if is_verified else "Age Verified ❌")
+        desc_parts.append(f"**Age:** {profile.age}")
+    if profile.throne_name:
+        rank_str = f"#{rank}" if rank is not None else "Unranked"
+        desc_parts.append(f"**Throne Name:** {profile.throne_name} ({rank_str})")
+    desc_parts.append("Age Verified ✅" if is_verified else "Age Verified ❌")
+
+    owner_label: str | None = None
+    if owned_by_member is not None:
+        owner_label = owned_by_member.mention
+    elif profile.owned_by_domme_user_id:
+        owner_label = f"<@{profile.owned_by_domme_user_id}>"
+    if owner_label:
+        desc_parts.append(f"**Owned By:** {owner_label}")
 
     color = discord.Color(profile.profile_color) if profile.profile_color else SOFT_DARK
     embed = _styled_embed(
         title=f"✦ {display_name}",
-        description="\n".join(identity_parts),
+        description="\n".join(desc_parts),
         color=color,
     )
     embed.set_thumbnail(url=member.display_avatar.url)
-
-    if profile.throne_name:
-        embed.add_field(name="Throne Name", value=profile.throne_name, inline=True)
-
-    if rank is not None:
-        embed.add_field(name="Leaderboard Rank", value=f"#{rank}", inline=True)
-    elif profile.throne_name:
-        embed.add_field(name="Leaderboard Rank", value="Unranked", inline=True)
-
-    if owned_by_member is not None:
-        embed.add_field(name="Owned By", value=owned_by_member.mention, inline=False)
-    elif profile.owned_by_domme_user_id:
-        embed.add_field(name="Owned By", value=f"<@{profile.owned_by_domme_user_id}>", inline=False)
 
     if _has_value(profile.kinks):
         embed.add_field(name="Kinks", value=profile.kinks, inline=False)

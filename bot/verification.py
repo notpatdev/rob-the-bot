@@ -39,6 +39,7 @@ from bot.views import (
     DommeSetupThroneView,
     FormLinkView,
     HelpView,
+    ImportIdsModal,
     ReactionRoleSetupModal,
     RoleSelectionView,
     StaffReviewView,
@@ -51,6 +52,7 @@ from bot.views import (
     SubSetupOwnerView,
     SubSetupReviewView,
     VerificationPanelView,
+    _ImportIdsTriggerView,
 )
 
 log = logging.getLogger(__name__)
@@ -1939,6 +1941,34 @@ class VerificationCog(commands.Cog):
         )
         await ctx.reply(
             f"Resync complete for **{scope}**. Synced **{len(synced)}** command(s).",
+            mention_author=False,
+        )
+
+    @commands.command(name="import")
+    async def cmd_import(
+        self,
+        ctx: commands.Context[commands.Bot],
+        subcommand: str | None = None,
+    ) -> None:
+        """Admin command: `!import ids` opens a form to update channel/role IDs."""
+        if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+            await ctx.reply("This command can only be used in a server.", mention_author=False)
+            return
+        if not has_admin_command_permissions(ctx.author, self.config):
+            await ctx.reply(messages.UNAUTHORISED_HELP_RESPONSE, mention_author=False)
+            return
+        if (subcommand or "").strip().lower() != "ids":
+            await ctx.reply(
+                "Usage: `!import ids` — opens a form to paste your server IDs.",
+                mention_author=False,
+            )
+            return
+        # ctx.interaction is None for prefix commands; we must send a view with a button
+        # to open the modal, since modals can only be opened from interactions.
+        view = _ImportIdsTriggerView()
+        await ctx.reply(
+            "Click the button below to open the ID import form.",
+            view=view,
             mention_author=False,
         )
 
