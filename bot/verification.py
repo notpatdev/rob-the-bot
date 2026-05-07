@@ -57,6 +57,20 @@ from bot.views import (
 log = logging.getLogger(__name__)
 
 
+def _container_view(
+    container: discord.ui.Container,
+    *,
+    buttons: list[discord.ui.Button] | None = None,
+) -> discord.ui.LayoutView:
+    """Wrap a Container in a LayoutView, optionally adding buttons."""
+    view = discord.ui.LayoutView()
+    view.add_item(container)
+    if buttons:
+        for btn in buttons:
+            view.add_item(btn)
+    return view
+
+
 @dataclass
 class DommeProfileSession:
     user_id: int
@@ -276,7 +290,7 @@ class ReactionRoleService:
             )
         await interaction.followup.send(
             content=warning,
-            embed=embeds.reaction_role_created_embed(message.jump_url, channel, successful_mappings),
+            view=_container_view(embeds.reaction_role_created_container(message.jump_url, channel, successful_mappings)),
             ephemeral=True,
         )
 
@@ -480,7 +494,7 @@ class VerificationService:
             return
 
         try:
-            await channel.send(embed=embeds.welcome_embed(member))
+            await channel.send(view=_container_view(embeds.welcome_container(member)))
         except discord.HTTPException:
             log.exception("Failed to send welcome embed for %s.", member.id)
 
@@ -525,7 +539,7 @@ class VerificationService:
 
         try:
             prompt_message = await interaction.user.send(
-                embed=embeds.initial_verification_dm_embed(),
+                view=_container_view(embeds.initial_verification_dm_container()),
             )
         except (discord.Forbidden, discord.HTTPException):
             await self._send_interaction_message(
@@ -568,8 +582,7 @@ class VerificationService:
             self.active_sessions.discard(key)
             await self._edit_dm_message(
                 prompt_message,
-                embed=embeds.session_expired_dm_embed(),
-                view=None,
+                view=_container_view(embeds.session_expired_dm_container()),
             )
 
     async def setup_verification_panel(self, ctx: commands.Context[commands.Bot]) -> None:
@@ -594,10 +607,9 @@ class VerificationService:
             return
 
         try:
-            await channel.send(
-                embed=embeds.verification_panel_embed(),
-                view=VerificationPanelView(self),
-            )
+            view = VerificationPanelView(self)
+            view._set_container(embeds.verification_panel_container())
+            await channel.send(view=view)
         except discord.HTTPException:
             log.exception("Failed to post verification panel.")
             await self._send_context_message(
@@ -630,7 +642,7 @@ class VerificationService:
         )
         await self._send_context_message(
             ctx,
-            embed=embeds.verification_status_embed(request, user),
+            view=_container_view(embeds.verification_status_container(request, user)),
         )
 
     async def verify_cleanup(self, ctx: commands.Context[commands.Bot]) -> None:
@@ -653,7 +665,7 @@ class VerificationService:
         )
         await self._send_context_message(
             ctx,
-            embed=embeds.verification_cleanup_embed(role=role, members=members),
+            view=_container_view(embeds.verification_cleanup_container(role=role, members=members)),
         )
 
     async def review_request(
@@ -710,7 +722,7 @@ class VerificationService:
                 interaction,
                 request,
                 status="denied_underage",
-                dm_embed=embeds.denied_underage_dm_embed(),
+                dm_container=embeds.denied_underage_dm_container(),
                 log_title="Verification Denied - Under 18",
                 log_color=embeds.RED,
                 log_status="Denied - Under 18",
@@ -721,7 +733,7 @@ class VerificationService:
                 interaction,
                 request,
                 status="denied_invalid",
-                dm_embed=embeds.denied_invalid_dm_embed(),
+                dm_container=embeds.denied_invalid_dm_container(),
                 log_title="Verification Denied - Invalid Service",
                 log_color=embeds.ORANGE,
                 log_status="Denied - Invalid Service",
@@ -746,8 +758,7 @@ class VerificationService:
             if submission is None:
                 await self._edit_dm_message(
                     prompt_message,
-                    embed=embeds.session_expired_dm_embed(),
-                    view=None,
+                    view=_container_view(embeds.session_expired_dm_container()),
                 )
                 await self._record_expired(member, guild)
                 return
@@ -756,8 +767,7 @@ class VerificationService:
             if selected_role is None:
                 await self._edit_dm_message(
                     prompt_message,
-                    embed=embeds.session_expired_dm_embed(),
-                    view=None,
+                    view=_container_view(embeds.session_expired_dm_container()),
                 )
                 await self._record_expired(member, guild, submission=submission)
                 return
@@ -780,8 +790,7 @@ class VerificationService:
                 log.error("Created verification request %s but could not fetch it.", request_id)
                 await self._edit_dm_message(
                     prompt_message,
-                    embed=embeds.session_expired_dm_embed(),
-                    view=None,
+                    view=_container_view(embeds.session_expired_dm_container()),
                 )
                 return
 
@@ -794,16 +803,13 @@ class VerificationService:
                 )
                 await self._edit_dm_message(
                     prompt_message,
-                    embed=embeds.session_expired_dm_embed(),
-                    view=None,
+                    view=_container_view(embeds.session_expired_dm_container()),
                 )
                 return
 
-            await safe_dm(
-                member,
-                embed=embeds.pending_review_embed(),
-                view=FormLinkView(),
-            )
+            view = FormLinkView()
+            view._set_container(embeds.pending_review_container())
+            await safe_dm(member, view=view)
         finally:
             self.active_sessions.discard(key)
 
@@ -833,8 +839,7 @@ class VerificationService:
 
             await self._edit_dm_message(
                 prompt_message,
-                embed=embeds.initial_verification_dm_embed(messages.INVALID_SUBMISSION_DM_DESCRIPTION),
-                view=None,
+                view=_container_view(embeds.initial_verification_dm_container(messages.INVALID_SUBMISSION_DM_DESCRIPTION)),
             )
 
     async def _ask_role(
@@ -844,9 +849,9 @@ class VerificationService:
     ) -> str | None:
         view = RoleSelectionView(member.id)
         view.message = prompt_message
+        view._set_container(embeds.role_prompt_container())
         await self._edit_dm_message(
             prompt_message,
-            embed=embeds.role_prompt_embed(),
             view=view,
         )
 
@@ -854,9 +859,9 @@ class VerificationService:
         if timed_out:
             return None
 
+        view._set_container(embeds.role_prompt_container(view.selection))
         await self._edit_dm_message(
             prompt_message,
-            embed=embeds.role_prompt_embed(view.selection),
             view=view,
         )
         return view.selection
@@ -873,10 +878,10 @@ class VerificationService:
 
         link_url = request.verification_value if request.verification_type == "Link" else None
         view = StaffReviewView(self, request.id, link_url=link_url)
+        view._set_container(embeds.verification_log_container(request, member))
         try:
             message = await channel.send(
                 content=mention_role(self.config.moderation_role_id),
-                embed=embeds.verification_log_embed(request, member),
                 view=view,
                 allowed_mentions=discord.AllowedMentions(roles=True),
             )
@@ -991,7 +996,7 @@ class VerificationService:
             )
             return
 
-        await safe_dm(member, embed=embeds.approved_dm_embed(self.config))
+        await safe_dm(member, view=_container_view(embeds.approved_dm_container(self.config)))
         await self._send_general_announcement(request)
         await self._edit_staff_message(
             interaction,
@@ -1008,7 +1013,7 @@ class VerificationService:
         request: VerificationRequest,
         *,
         status: str,
-        dm_embed: discord.Embed,
+        dm_container: discord.ui.Container,
         log_title: str,
         log_color: discord.Color,
         log_status: str,
@@ -1040,7 +1045,7 @@ class VerificationService:
                 user = None
 
         if user:
-            await safe_dm(user, embed=dm_embed)
+            await safe_dm(user, view=_container_view(dm_container))
 
         await self._edit_staff_message(
             interaction,
@@ -1063,16 +1068,16 @@ class VerificationService:
         assert isinstance(interaction.user, discord.Member)
         link_url = request.verification_value if request.verification_type == "Link" else None
         view = StaffReviewView(None, request.id, link_url=link_url, disabled=True)
-        embed = embeds.verification_outcome_embed(
+        view._set_container(embeds.verification_outcome_container(
             request=request,
             moderator=interaction.user,
             title=title,
             color=color,
             status=status,
-        )
+        ))
         try:
             if interaction.message:
-                await interaction.message.edit(content=None, embed=embed, view=view)
+                await interaction.message.edit(content=None, view=view)
         except discord.HTTPException:
             log.exception("Failed to edit staff verification message %s.", request.id)
 
@@ -1119,11 +1124,10 @@ class VerificationService:
         self,
         message: discord.Message,
         *,
-        embed: discord.Embed,
-        view: discord.ui.View | None,
+        view: discord.ui.LayoutView | None,
     ) -> None:
         try:
-            await message.edit(embed=embed, view=view)
+            await message.edit(view=view)
         except (discord.Forbidden, discord.NotFound, discord.HTTPException):
             log.exception("Failed to edit DM message %s.", message.id)
 
@@ -1145,22 +1149,22 @@ class VerificationService:
         ctx: commands.Context[commands.Bot],
         content: str | None = None,
         *,
-        embed: discord.Embed | None = None,
+        view: discord.ui.LayoutView | None = None,
     ) -> None:
-        await ctx.reply(content=content, embed=embed, mention_author=False)
+        await ctx.reply(content=content, view=view, mention_author=False)
 
     async def _send_interaction_message(
         self,
         interaction: discord.Interaction,
         content: str | None = None,
         *,
-        embed: discord.Embed | None = None,
+        view: discord.ui.LayoutView | None = None,
         ephemeral: bool = False,
     ) -> None:
         if interaction.response.is_done():
-            await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
+            await interaction.followup.send(content=content, view=view, ephemeral=ephemeral)
         else:
-            await interaction.response.send_message(content=content, embed=embed, ephemeral=ephemeral)
+            await interaction.response.send_message(content=content, view=view, ephemeral=ephemeral)
 
 
 class DommeProfileService:
@@ -1178,11 +1182,15 @@ class DommeProfileService:
     def finish_session(self, user_id: int) -> None:
         self.sessions.pop(user_id, None)
 
-    def build_later_embed(self) -> discord.Embed:
-        return embeds.domme_setup_later_embed()
+    def build_later_view(self) -> discord.ui.LayoutView:
+        view = discord.ui.LayoutView()
+        view.add_item(embeds.domme_setup_later_container())
+        return view
 
-    def build_cancelled_embed(self) -> discord.Embed:
-        return embeds.domme_setup_cancelled_embed()
+    def build_cancelled_view(self) -> discord.ui.LayoutView:
+        view = discord.ui.LayoutView()
+        view.add_item(embeds.domme_setup_cancelled_container())
+        return view
 
     def _make_session_from_profile(self, profile: "DommeProfile") -> DommeProfileSession:
         """Pre-populate a session from an existing saved profile."""
@@ -1218,11 +1226,9 @@ class DommeProfileService:
             else DommeProfileSession(user_id=member.id)
         )
         view = DommeSetupIntroView(self, session)
+        view._set_container(embeds.domme_setup_intro_container())
         try:
-            session.message = await member.send(
-                embed=embeds.domme_setup_intro_embed(),
-                view=view,
-            )
+            session.message = await member.send(view=view)
         except (discord.Forbidden, discord.HTTPException):
             return False
         session.current_view = view
@@ -1242,10 +1248,8 @@ class DommeProfileService:
             else DommeProfileSession(user_id=user.id)
         )
         view = DommeSetupIntroView(self, session)
-        await interaction.response.send_message(
-            embed=embeds.domme_setup_intro_embed(),
-            view=view,
-        )
+        view._set_container(embeds.domme_setup_intro_container())
+        await interaction.response.send_message(view=view)
         session.message = await interaction.original_response()
         session.current_view = view
         self.sessions[user.id] = session
@@ -1255,11 +1259,12 @@ class DommeProfileService:
         session: DommeProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = DommeSetupIntroView(self, session)
+        view._set_container(embeds.domme_setup_intro_container())
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.domme_setup_intro_embed(),
-            view=DommeSetupIntroView(self, session),
+            view=view,
         )
 
     async def show_name_step(
@@ -1267,14 +1272,15 @@ class DommeProfileService:
         session: DommeProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = DommeSetupNameView(self, session)
+        view._set_container(embeds.domme_setup_name_container(
+            name=session.name,
+            honorific=session.honorific,
+        ))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.domme_setup_name_embed(
-                name=session.name,
-                honorific=session.honorific,
-            ),
-            view=DommeSetupNameView(self, session),
+            view=view,
         )
 
     async def show_details_step(
@@ -1282,17 +1288,18 @@ class DommeProfileService:
         session: DommeProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = DommeSetupDetailsView(self, session)
+        view._set_container(embeds.domme_setup_details_container(
+            pronouns=session.pronouns,
+            age=session.age,
+            tribute_price=session.tribute_price,
+            kinks=session.kinks,
+            limits=session.limits,
+        ))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.domme_setup_details_embed(
-                pronouns=session.pronouns,
-                age=session.age,
-                tribute_price=session.tribute_price,
-                kinks=session.kinks,
-                limits=session.limits,
-            ),
-            view=DommeSetupDetailsView(self, session),
+            view=view,
         )
 
     async def show_payments_step(
@@ -1300,22 +1307,23 @@ class DommeProfileService:
         session: DommeProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = DommeSetupPaymentsView(self, session)
+        view._set_container(embeds.domme_setup_links_container(
+            throne=session.throne,
+            tribute_link=session.tribute_link,
+            payment_link1=session.payment_link1,
+            payment_link2=session.payment_link2,
+            payment_link3=session.payment_link3,
+            payment_link4=session.payment_link4,
+            content_link1=session.content_link1,
+            content_link2=session.content_link2,
+            content_link3=session.content_link3,
+            content_link4=session.content_link4,
+        ))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.domme_setup_links_embed(
-                throne=session.throne,
-                tribute_link=session.tribute_link,
-                payment_link1=session.payment_link1,
-                payment_link2=session.payment_link2,
-                payment_link3=session.payment_link3,
-                payment_link4=session.payment_link4,
-                content_link1=session.content_link1,
-                content_link2=session.content_link2,
-                content_link3=session.content_link3,
-                content_link4=session.content_link4,
-            ),
-            view=DommeSetupPaymentsView(self, session),
+            view=view,
         )
 
     async def refresh_payments_step(
@@ -1341,11 +1349,12 @@ class DommeProfileService:
         session: DommeProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = DommeSetupThroneView(self, session)
+        view._set_container(embeds.domme_setup_throne_container(throne=session.throne))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.domme_setup_throne_embed(throne=session.throne),
-            view=DommeSetupThroneView(self, session),
+            view=view,
         )
 
     async def show_color_step(
@@ -1353,11 +1362,12 @@ class DommeProfileService:
         session: DommeProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = DommeSetupColorView(self, session)
+        view._set_container(embeds.domme_setup_color_container(profile_color=session.profile_color))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.domme_setup_color_embed(profile_color=session.profile_color),
-            view=DommeSetupColorView(self, session),
+            view=view,
         )
 
     async def show_review_step(
@@ -1365,31 +1375,32 @@ class DommeProfileService:
         session: DommeProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = DommeSetupReviewView(self, session)
+        view._set_container(embeds.domme_setup_review_container(
+            name=session.name,
+            honorific=session.honorific,
+            pronouns=session.pronouns,
+            age=session.age,
+            tribute_price=session.tribute_price,
+            throne=session.throne,
+            tribute_link=session.tribute_link,
+            payment_link1=session.payment_link1,
+            payment_link2=session.payment_link2,
+            payment_link3=session.payment_link3,
+            payment_link4=session.payment_link4,
+            content_link1=session.content_link1,
+            content_link2=session.content_link2,
+            content_link3=session.content_link3,
+            content_link4=session.content_link4,
+            profile_color=session.profile_color,
+            throne_tracking_enabled=session.throne_tracking_enabled,
+            kinks=session.kinks,
+            limits=session.limits,
+        ))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.domme_setup_review_embed(
-                name=session.name,
-                honorific=session.honorific,
-                pronouns=session.pronouns,
-                age=session.age,
-                tribute_price=session.tribute_price,
-                throne=session.throne,
-                tribute_link=session.tribute_link,
-                payment_link1=session.payment_link1,
-                payment_link2=session.payment_link2,
-                payment_link3=session.payment_link3,
-                payment_link4=session.payment_link4,
-                content_link1=session.content_link1,
-                content_link2=session.content_link2,
-                content_link3=session.content_link3,
-                content_link4=session.content_link4,
-                profile_color=session.profile_color,
-                throne_tracking_enabled=session.throne_tracking_enabled,
-                kinks=session.kinks,
-                limits=session.limits,
-            ),
-            view=DommeSetupReviewView(self, session),
+            view=view,
         )
 
     async def save_profile(
@@ -1420,11 +1431,11 @@ class DommeProfileService:
             limits=session.limits,
         )
         self.finish_session(session.user_id)
+        view = _container_view(embeds.domme_setup_complete_container())
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.domme_setup_complete_embed(),
-            view=None,
+            view=view,
         )
 
     async def delete_profile(self, interaction: discord.Interaction, user_id: int) -> None:
@@ -1445,8 +1456,7 @@ class DommeProfileService:
         session: DommeProfileSession,
         *,
         interaction: discord.Interaction,
-        embed: discord.Embed,
-        view: discord.ui.View | None,
+        view: discord.ui.LayoutView | None,
     ) -> None:
         if session.message is None:
             return
@@ -1457,9 +1467,9 @@ class DommeProfileService:
 
         try:
             if interaction.response.is_done():
-                await session.message.edit(embed=embed, view=view)
+                await session.message.edit(view=view)
             else:
-                await interaction.response.edit_message(embed=embed, view=view)
+                await interaction.response.edit_message(view=view)
                 if interaction.message:
                     session.message = interaction.message
             session.current_view = view
@@ -1491,8 +1501,8 @@ def _normalize_url(url: str) -> str | None:
     return url
 
 
-def _tribute_view(profile: "DommeProfile") -> discord.ui.View | None:
-    """Return a View with a Tribute link button, or None if no valid tribute_link."""
+def _tribute_view(profile: "DommeProfile") -> discord.ui.LayoutView | None:
+    """Return a LayoutView with a Tribute link button, or None if no valid tribute_link."""
     from bot.database import DommeProfile
     if not profile.tribute_link:
         return None
@@ -1500,7 +1510,7 @@ def _tribute_view(profile: "DommeProfile") -> discord.ui.View | None:
     if safe_url is None:
         return None
 
-    class TributeView(discord.ui.View):
+    class TributeView(discord.ui.LayoutView):
         def __init__(self) -> None:
             super().__init__(timeout=None)
             self.add_item(
@@ -1510,6 +1520,12 @@ def _tribute_view(profile: "DommeProfile") -> discord.ui.View | None:
                     style=discord.ButtonStyle.link,
                 )
             )
+
+        def _set_container(self, container: discord.ui.Container) -> None:
+            for item in list(self.children):
+                if isinstance(item, discord.ui.Container):
+                    self.remove_item(item)
+            self.children.insert(0, container)
 
     return TributeView()
 
@@ -1529,11 +1545,15 @@ class SubProfileService:
     def finish_session(self, user_id: int) -> None:
         self.sessions.pop(user_id, None)
 
-    def build_later_embed(self) -> discord.Embed:
-        return embeds.sub_setup_later_embed()
+    def build_later_view(self) -> discord.ui.LayoutView:
+        view = discord.ui.LayoutView()
+        view.add_item(embeds.sub_setup_later_container())
+        return view
 
-    def build_cancelled_embed(self) -> discord.Embed:
-        return embeds.sub_setup_cancelled_embed()
+    def build_cancelled_view(self) -> discord.ui.LayoutView:
+        view = discord.ui.LayoutView()
+        view.add_item(embeds.sub_setup_cancelled_container())
+        return view
 
     def _make_session_from_profile(self, profile: "SubProfile") -> SubProfileSession:
         """Pre-populate a session from an existing saved sub profile."""
@@ -1558,11 +1578,9 @@ class SubProfileService:
             else SubProfileSession(user_id=member.id)
         )
         view = SubSetupIntroView(self, session)
+        view._set_container(embeds.sub_setup_intro_container())
         try:
-            session.message = await member.send(
-                embed=embeds.sub_setup_intro_embed(),
-                view=view,
-            )
+            session.message = await member.send(view=view)
         except (discord.Forbidden, discord.HTTPException):
             return False
         session.current_view = view
@@ -1582,10 +1600,8 @@ class SubProfileService:
             else SubProfileSession(user_id=user.id)
         )
         view = SubSetupIntroView(self, session)
-        await interaction.response.send_message(
-            embed=embeds.sub_setup_intro_embed(),
-            view=view,
-        )
+        view._set_container(embeds.sub_setup_intro_container())
+        await interaction.response.send_message(view=view)
         session.message = await interaction.original_response()
         session.current_view = view
         self.sessions[user.id] = session
@@ -1595,11 +1611,12 @@ class SubProfileService:
         session: SubProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = SubSetupIntroView(self, session)
+        view._set_container(embeds.sub_setup_intro_container())
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.sub_setup_intro_embed(),
-            view=SubSetupIntroView(self, session),
+            view=view,
         )
 
     async def show_name_step(
@@ -1607,11 +1624,12 @@ class SubProfileService:
         session: SubProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = SubSetupNameView(self, session)
+        view._set_container(embeds.sub_setup_name_container(throne_name=session.throne_name))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.sub_setup_name_embed(throne_name=session.throne_name),
-            view=SubSetupNameView(self, session),
+            view=view,
         )
 
     async def show_details_step(
@@ -1619,15 +1637,16 @@ class SubProfileService:
         session: SubProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = SubSetupDetailsView(self, session)
+        view._set_container(embeds.sub_setup_details_container(
+            name=session.name,
+            pronouns=session.pronouns,
+            age=session.age,
+        ))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.sub_setup_details_embed(
-                name=session.name,
-                pronouns=session.pronouns,
-                age=session.age,
-            ),
-            view=SubSetupDetailsView(self, session),
+            view=view,
         )
 
     async def show_kinks_limits_step(
@@ -1635,14 +1654,15 @@ class SubProfileService:
         session: SubProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = SubSetupKinksLimitsView(self, session)
+        view._set_container(embeds.sub_setup_kinks_limits_container(
+            kinks=session.kinks,
+            limits=session.limits,
+        ))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.sub_setup_kinks_limits_embed(
-                kinks=session.kinks,
-                limits=session.limits,
-            ),
-            view=SubSetupKinksLimitsView(self, session),
+            view=view,
         )
 
     async def show_color_step(
@@ -1650,11 +1670,12 @@ class SubProfileService:
         session: SubProfileSession,
         interaction: discord.Interaction,
     ) -> None:
+        view = SubSetupColorView(self, session)
+        view._set_container(embeds.sub_setup_color_container(profile_color=session.profile_color))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.sub_setup_color_embed(profile_color=session.profile_color),
-            view=SubSetupColorView(self, session),
+            view=view,
         )
 
     async def show_owner_step(
@@ -1663,13 +1684,14 @@ class SubProfileService:
         interaction: discord.Interaction,
     ) -> None:
         options = await self._build_owner_options(session)
+        view = SubSetupOwnerView(self, session, options)
+        view._set_container(embeds.sub_setup_owner_container(
+            owned_by_label=self._owner_label(session),
+        ))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.sub_setup_owner_embed(
-                owned_by_label=self._owner_label(session),
-            ),
-            view=SubSetupOwnerView(self, session, options),
+            view=view,
         )
 
     async def refresh_owner_step(
@@ -1678,13 +1700,14 @@ class SubProfileService:
         interaction: discord.Interaction,
         options: list[discord.SelectOption],
     ) -> None:
+        view = SubSetupOwnerView(self, session, options)
+        view._set_container(embeds.sub_setup_owner_container(
+            owned_by_label=self._owner_label(session),
+        ))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.sub_setup_owner_embed(
-                owned_by_label=self._owner_label(session),
-            ),
-            view=SubSetupOwnerView(self, session, options),
+            view=view,
         )
 
     def _owner_label(self, session: SubProfileSession) -> str:
@@ -1723,20 +1746,21 @@ class SubProfileService:
         interaction: discord.Interaction,
     ) -> None:
         owned_by_label = self._owner_label(session)
+        view = SubSetupReviewView(self, session)
+        view._set_container(embeds.sub_setup_review_container(
+            throne_name=session.throne_name,
+            name=session.name,
+            pronouns=session.pronouns,
+            age=session.age,
+            profile_color=session.profile_color,
+            kinks=session.kinks,
+            limits=session.limits,
+            owned_by_label=owned_by_label,
+        ))
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.sub_setup_review_embed(
-                throne_name=session.throne_name,
-                name=session.name,
-                pronouns=session.pronouns,
-                age=session.age,
-                profile_color=session.profile_color,
-                kinks=session.kinks,
-                limits=session.limits,
-                owned_by_label=owned_by_label,
-            ),
-            view=SubSetupReviewView(self, session),
+            view=view,
         )
 
     async def save_profile(
@@ -1756,11 +1780,11 @@ class SubProfileService:
             owned_by_domme_user_id=session.owned_by_domme_user_id,
         )
         self.finish_session(session.user_id)
+        view = _container_view(embeds.sub_setup_complete_container())
         await self._update_session_message(
             session,
             interaction=interaction,
-            embed=embeds.sub_setup_complete_embed(),
-            view=None,
+            view=view,
         )
 
     async def delete_profile(self, interaction: discord.Interaction, user_id: int) -> None:
@@ -1781,8 +1805,7 @@ class SubProfileService:
         session: SubProfileSession,
         *,
         interaction: discord.Interaction,
-        embed: discord.Embed,
-        view: discord.ui.View | None,
+        view: discord.ui.LayoutView | None,
     ) -> None:
         if session.message is None:
             return
@@ -1791,9 +1814,9 @@ class SubProfileService:
             previous_view.stop()
         try:
             if interaction.response.is_done():
-                await session.message.edit(embed=embed, view=view)
+                await session.message.edit(view=view)
             else:
-                await interaction.response.edit_message(embed=embed, view=view)
+                await interaction.response.edit_message(view=view)
                 if interaction.message:
                     session.message = interaction.message
             session.current_view = view
@@ -1833,19 +1856,19 @@ class VerificationCog(commands.Cog):
         if not isinstance(channel, discord.TextChannel):
             return
         rows = await self.database.get_leaderboard_top_sends()
-        embed = embeds.server_leaderboard_embed(rows, self.bot)
+        view = _container_view(embeds.server_leaderboard_container(rows, self.bot))
         stored = await self.database.get_leaderboard_message(guild_id=guild.id)
         if stored is not None:
             msg_id, _ = stored
             try:
                 msg = await channel.fetch_message(msg_id)
-                await msg.edit(embed=embed)
+                await msg.edit(view=view)
                 return
             except discord.NotFound:
                 pass
         # Post a new leaderboard message and pin it
         try:
-            msg = await channel.send(embed=embed)
+            msg = await channel.send(view=view)
             await self.database.upsert_leaderboard_message(
                 guild_id=guild.id,
                 message_id=msg.id,
@@ -1963,8 +1986,8 @@ class VerificationCog(commands.Cog):
             )
             return
         view = ImportIdsUploadView(invoker_id=ctx.author.id)
+        view._set_container(embeds.import_ids_container())
         await ctx.reply(
-            embed=embeds.import_ids_embed(),
             view=view,
             mention_author=False,
         )
@@ -2003,15 +2026,20 @@ class VerificationCog(commands.Cog):
             else:
                 action = arg
 
-        content, embed, view, is_public, _ = await self._build_domme_response(
+        content, container, view, is_public, _ = await self._build_domme_response(
             member=ctx.author,
             guild=ctx.guild,
             action=action,
             target_member=target_member,
         )
+        # If we have a container, wrap it in a LayoutView (possibly with existing view items)
+        if container is not None:
+            if view is None:
+                view = _container_view(container)
+            elif hasattr(view, "_set_container"):
+                view._set_container(container)
         reply = await ctx.reply(
             content=content,
-            embed=embed,
             view=view,
             mention_author=False,
         )
@@ -2082,15 +2110,20 @@ class VerificationCog(commands.Cog):
             )
             return
 
-        content, embed, view, is_public, leaderboard_embed = await self._build_domme_response(
+        content, container, view, is_public, leaderboard_container = await self._build_domme_response(
             member=interaction.user,
             guild=interaction.guild,
             action=action.value if action else None,
             target_member=user,
         )
+        # If we have a container, wrap it in a LayoutView (possibly with existing view items)
+        if container is not None:
+            if view is None:
+                view = _container_view(container)
+            elif hasattr(view, "_set_container"):
+                view._set_container(container)
         response_kwargs: dict[str, object] = {
             "content": content,
-            "embed": embed,
             "ephemeral": not is_public,
         }
         if view is not None:
@@ -2101,8 +2134,8 @@ class VerificationCog(commands.Cog):
         if view is not None and hasattr(view, "message"):
             view.message = await interaction.original_response()
         # Show personal leaderboard as ephemeral follow-up to the domme themselves
-        if leaderboard_embed is not None:
-            await interaction.followup.send(embed=leaderboard_embed, ephemeral=True)
+        if leaderboard_container is not None:
+            await interaction.followup.send(view=_container_view(leaderboard_container), ephemeral=True)
 
     @app_commands.command(
         name="sub",
@@ -2209,8 +2242,8 @@ class VerificationCog(commands.Cog):
         if profile is not None:
             is_verified = self._is_verified(member)
             rank = await self.database.get_sub_leaderboard_rank(user_id=member.id)
-            embed = embeds.sub_profile_embed(profile, member, is_verified=is_verified, rank=rank)
-            await interaction.response.send_message(embed=embed)
+            container = embeds.sub_profile_container(profile, member, is_verified=is_verified, rank=rank)
+            await interaction.response.send_message(view=_container_view(container))
             return
 
         if member.id in self.sub_service.sessions:
@@ -2278,8 +2311,8 @@ class VerificationCog(commands.Cog):
             is_moderator=is_moderator,
         )
         view = HelpView(interaction.user.id, pages=pages)
+        view._set_container(embeds.help_page_container(view.current_page, view.total_pages, pages))
         await interaction.response.send_message(
-            embed=embeds.help_page_embed(view.current_page, view.total_pages, pages),
             view=view,
             ephemeral=True,
         )
@@ -2296,10 +2329,10 @@ class VerificationCog(commands.Cog):
         guild: discord.Guild,
         action: str | None,
         target_member: discord.Member | None = None,
-    ) -> tuple[str | None, discord.Embed | None, discord.ui.View | None, bool, discord.Embed | None]:
-        """Return (content, embed, view, is_public, leaderboard_embed).
+    ) -> tuple[str | None, discord.ui.Container | None, discord.ui.View | None, bool, discord.ui.Container | None]:
+        """Return (content, container, view, is_public, leaderboard_container).
 
-        leaderboard_embed is only set when the caller is viewing their own profile and has sends.
+        leaderboard_container is only set when the caller is viewing their own profile and has sends.
         """
         domme_role = guild.get_role(self.config.domme_role_id)
         if domme_role is None:
@@ -2319,8 +2352,8 @@ class VerificationCog(commands.Cog):
                 suffix = "doesn't have a Domme profile." if target != member else "don't have a Domme profile yet."
                 return f"{name} {suffix}", None, None, False, None
             sends = await self.database.get_sends_for_domme(domme_user_id=target.id)
-            leaderboard_embed = embeds.domme_send_leaderboard_embed(sends, target)
-            return None, leaderboard_embed, None, True, None
+            leaderboard_container = embeds.domme_send_leaderboard_container(sends, target)
+            return None, leaderboard_container, None, True, None
 
         # Viewing another member's profile
         if target_member is not None and target_member != member:
@@ -2328,9 +2361,9 @@ class VerificationCog(commands.Cog):
             if profile is None:
                 return f"{target_member.display_name} doesn't have a Domme profile saved.", None, None, False, None
             is_verified = self._is_verified(target_member)
-            embed = embeds.domme_profile_embed(profile, target_member, is_verified=is_verified)
+            container = embeds.domme_profile_container(profile, target_member, is_verified=is_verified)
             view = _tribute_view(profile)
-            return None, embed, view, True, None
+            return None, container, view, True, None
 
         profile = await self.database.get_domme_profile(user_id=member.id)
 
@@ -2347,14 +2380,14 @@ class VerificationCog(commands.Cog):
 
         if profile is not None:
             is_verified = self._is_verified(member)
-            embed = embeds.domme_profile_embed(profile, member, is_verified=is_verified)
+            container = embeds.domme_profile_container(profile, member, is_verified=is_verified)
             view = _tribute_view(profile)
             # Personal leaderboard as ephemeral follow-up
-            leaderboard_embed: discord.Embed | None = None
+            leaderboard_container: discord.ui.Container | None = None
             sends = await self.database.get_sends_for_domme(domme_user_id=member.id)
             if sends:
-                leaderboard_embed = embeds.domme_send_leaderboard_embed(sends, member)
-            return None, embed, view, True, leaderboard_embed
+                leaderboard_container = embeds.domme_send_leaderboard_container(sends, member)
+            return None, container, view, True, leaderboard_container
 
         if member.id in self.domme_service.sessions:
             return (

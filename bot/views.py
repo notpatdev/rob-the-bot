@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot import messages
-from bot.embeds import PROFILE_COLOR_PRESETS, build_help_pages, help_page_embed
+from bot.embeds import PROFILE_COLOR_PRESETS, build_help_pages, help_page_container
 
 if TYPE_CHECKING:
     from bot.verification import (
@@ -25,16 +25,22 @@ def _clean_optional(value: str) -> str | None:
     return cleaned or None
 
 
-def _disable_all(view: discord.ui.View) -> None:
+def _disable_all(view: discord.ui.View | discord.ui.LayoutView) -> None:
     for item in view.children:
         if hasattr(item, "disabled"):
             item.disabled = True
 
 
-class VerificationPanelView(discord.ui.View):
+class VerificationPanelView(discord.ui.LayoutView):
     def __init__(self, service: VerificationService) -> None:
         super().__init__(timeout=None)
         self.service = service
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self.children.insert(0, container)
 
     @discord.ui.button(
         label="Verify",
@@ -49,12 +55,18 @@ class VerificationPanelView(discord.ui.View):
         await self.service.start_verification(interaction)
 
 
-class RoleSelectionView(discord.ui.View):
+class RoleSelectionView(discord.ui.LayoutView):
     def __init__(self, user_id: int) -> None:
         super().__init__(timeout=300)
         self.user_id = user_id
         self.selection: str | None = None
         self.message: discord.Message | None = None
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self.children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
@@ -96,7 +108,7 @@ class RoleSelectionView(discord.ui.View):
                 pass
 
 
-class StaffReviewView(discord.ui.View):
+class StaffReviewView(discord.ui.LayoutView):
     def __init__(
         self,
         service: VerificationService | None,
@@ -145,6 +157,12 @@ class StaffReviewView(discord.ui.View):
                 )
             )
 
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self.children.insert(0, container)
+
     async def _approve(self, interaction: discord.Interaction) -> None:
         if self.service:
             await self.service.review_request(interaction, self.request_id, "approve")
@@ -158,7 +176,7 @@ class StaffReviewView(discord.ui.View):
             await self.service.review_request(interaction, self.request_id, "deny_invalid")
 
 
-class FormLinkView(discord.ui.View):
+class FormLinkView(discord.ui.LayoutView):
     def __init__(self) -> None:
         super().__init__(timeout=None)
         self.add_item(
@@ -168,6 +186,12 @@ class FormLinkView(discord.ui.View):
                 url=messages.FORM_URL,
             )
         )
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self.children.insert(0, container)
 
 
 class ReactionRoleSetupModal(discord.ui.Modal, title="Create Reaction Role Message"):
@@ -225,7 +249,7 @@ class ReactionRoleSetupModal(discord.ui.Modal, title="Create Reaction Role Messa
         )
 
 
-class HelpView(discord.ui.View):
+class HelpView(discord.ui.LayoutView):
     def __init__(
         self,
         user_id: int,
@@ -268,6 +292,16 @@ class HelpView(discord.ui.View):
         self.close_button.callback = self._close
         self.add_item(self.close_button)
         self._sync_buttons()
+        self._set_container()
+
+    def _set_container(self) -> None:
+        # Remove old container if present and add fresh one at the front
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        container = help_page_container(self.current_page, self.total_pages, self.pages)
+        # Insert container at the beginning (index 0)
+        self.children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
@@ -290,17 +324,14 @@ class HelpView(discord.ui.View):
         _disable_all(self)
         await interaction.response.edit_message(
             content="Help menu closed.",
-            embed=None,
             view=None,
         )
         self.stop()
 
     async def _update(self, interaction: discord.Interaction) -> None:
         self._sync_buttons()
-        await interaction.response.edit_message(
-            embed=help_page_embed(self.current_page, self.total_pages, self.pages),
-            view=self,
-        )
+        self._set_container()
+        await interaction.response.edit_message(view=self)
 
     def _sync_buttons(self) -> None:
         self.previous_button.disabled = self.current_page == 0
@@ -308,11 +339,18 @@ class HelpView(discord.ui.View):
         self.page_button.label = f"Page {self.current_page + 1}/{self.total_pages}"
 
 
-class DommeSetupView(discord.ui.View):
+class DommeSetupView(discord.ui.LayoutView):
     def __init__(self, service: DommeProfileService, session: DommeProfileSession) -> None:
         super().__init__(timeout=900)
         self.service = service
         self.session = session
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        """Replace any existing container with the new one at the front."""
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self.children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.session.user_id:
@@ -350,8 +388,7 @@ class DommeSetupIntroView(DommeSetupView):
     ) -> None:
         self.service.finish_session(self.session.user_id)
         await interaction.response.edit_message(
-            embed=self.service.build_later_embed(),
-            view=None,
+            view=self.service.build_later_view(),
         )
         self.stop()
 
@@ -539,8 +576,7 @@ class DommeSetupReviewView(DommeSetupView):
     ) -> None:
         self.service.finish_session(self.session.user_id)
         await interaction.response.edit_message(
-            embed=self.service.build_cancelled_embed(),
-            view=None,
+            view=self.service.build_cancelled_view(),
         )
         self.stop()
 
@@ -797,11 +833,18 @@ class DommeContentLinksModal(discord.ui.Modal, title="Content Links"):
 # Sub profile setup views and modals
 # ---------------------------------------------------------------------------
 
-class SubSetupView(discord.ui.View):
+class SubSetupView(discord.ui.LayoutView):
     def __init__(self, service: SubProfileService, session: SubProfileSession) -> None:
         super().__init__(timeout=900)
         self.service = service
         self.session = session
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        """Replace any existing container with the new one at the front."""
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self.children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.session.user_id:
@@ -839,8 +882,7 @@ class SubSetupIntroView(SubSetupView):
     ) -> None:
         self.service.finish_session(self.session.user_id)
         await interaction.response.edit_message(
-            embed=self.service.build_later_embed(),
-            view=None,
+            view=self.service.build_later_view(),
         )
         self.stop()
 
@@ -888,8 +930,7 @@ class SubSetupReviewView(SubSetupView):
     ) -> None:
         self.service.finish_session(self.session.user_id)
         await interaction.response.edit_message(
-            embed=self.service.build_cancelled_embed(),
-            view=None,
+            view=self.service.build_cancelled_view(),
         )
         self.stop()
 
@@ -1321,13 +1362,19 @@ def _write_channels_py(parsed: dict[str, int]) -> str | None:
     return None
 
 
-class ImportIdsConfirmView(discord.ui.View):
+class ImportIdsConfirmView(discord.ui.LayoutView):
     """Confirm / Cancel buttons shown after the file is parsed."""
 
     def __init__(self, parsed: dict[str, int], *, invoker_id: int) -> None:
         super().__init__(timeout=_IMPORT_IDS_CONFIRM_TIMEOUT_SECONDS)
         self._parsed = parsed
         self._invoker_id = invoker_id
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self.children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self._invoker_id:
@@ -1345,17 +1392,19 @@ class ImportIdsConfirmView(discord.ui.View):
         _: discord.ui.Button,
     ) -> None:
         _disable_all(self)
+        # Remove container when showing just a result message
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
         err = _write_channels_py(self._parsed)
         if err:
             await interaction.response.edit_message(
                 content=f"❌ Could not write `channels.py`: {err}",
-                embed=None,
                 view=self,
             )
         else:
             await interaction.response.edit_message(
                 content="✅ **`channels.py` saved!** Restart the bot to apply.",
-                embed=None,
                 view=self,
             )
         self.stop()
@@ -1367,20 +1416,29 @@ class ImportIdsConfirmView(discord.ui.View):
         _: discord.ui.Button,
     ) -> None:
         _disable_all(self)
+        # Remove container when showing just a result message
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
         await interaction.response.edit_message(
             content="Import cancelled — nothing was saved.",
-            embed=None,
             view=self,
         )
         self.stop()
 
 
-class ImportIdsUploadView(discord.ui.View):
-    """Embed button — starts the file-upload flow when clicked."""
+class ImportIdsUploadView(discord.ui.LayoutView):
+    """Container button — starts the file-upload flow when clicked."""
 
     def __init__(self, *, invoker_id: int) -> None:
         super().__init__(timeout=_IMPORT_IDS_BUTTON_TIMEOUT_SECONDS)
         self._invoker_id = invoker_id
+
+    def _set_container(self, container: discord.ui.Container) -> None:
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Container):
+                self.remove_item(item)
+        self.children.insert(0, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self._invoker_id:
@@ -1462,11 +1520,11 @@ class ImportIdsUploadView(discord.ui.View):
         for field in _OPTIONAL_IMPORT_FIELDS:
             parsed.setdefault(field, 0)
 
-        from bot.embeds import import_ids_confirm_embed  # local to avoid circular import
+        from bot.embeds import import_ids_confirm_container  # local to avoid circular import
 
         confirm_view = ImportIdsConfirmView(parsed, invoker_id=interaction.user.id)
+        confirm_view._set_container(import_ids_confirm_container(parsed, warnings))
         await interaction.followup.send(
-            embed=import_ids_confirm_embed(parsed, warnings),
             view=confirm_view,
             ephemeral=True,
         )
