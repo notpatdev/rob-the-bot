@@ -109,16 +109,19 @@ class LeaderboardView(discord.ui.LayoutView):
             separator(),
             text_block(f"### {board_title}\n\n" + "\n".join(status_lines)),
         ]
-        if register_button is not None and register_section_text and register_kind == "domme":
-            sections.extend([separator(), action_section(register_section_text, register_button)])
+        if register_button is not None and register_section_text:
+            sections.append(separator())
+            if register_kind == "domme":
+                sections.append(action_section(register_section_text, register_button))
         sections.extend([separator(), text_block(_render_rows(rows) if rows else empty_message)])
         if register_button is not None and register_section_text and register_kind == "sub":
+            display_unclaimed_total = unclaimed_total if unclaimed_total is not None else "$0.00"
             sections.extend(
                 [
                     separator(),
                     action_section(
                         "### Unclaimed Sends\n\n"
-                        f"Tracked and waiting to be claimed: **{unclaimed_total or '$0.00'}**\n\n"
+                        f"Tracked and waiting to be claimed: **{display_unclaimed_total}**\n\n"
                         f"{register_section_text}",
                         register_button,
                     ),
