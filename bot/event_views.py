@@ -1,33 +1,18 @@
-"""Components V2 views and modals for Rob the Bot.
-
-All UI is built with discord.ui.LayoutView + Container/TextDisplay/Section/
-Separator/Thumbnail — no classic embeds are used anywhere.
-
-The Section(text, accessory=button) pattern puts buttons visually inside the
-card, aligned to the right of the accompanying text, matching the style shown
-in the screenshot the user provided.
-"""
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import discord
-from bot.ui.cards import event_status_card, info_view, send_notification_card, success_view
-from bot.ui.copy import DEPLOY_NOTIFICATION, EMPTY_LEADERBOARD, NOT_YOURS
-from bot.ui.theme import ROB_BLUE as BLUE
-from bot.ui.theme import ROB_GOLD as GOLD
-from bot.ui.theme import ROB_PURPLE as PURPLE
-from bot.ui.theme import ROB_RED as RED
+
+from bot.ui.cards import success_view
+from bot.ui.components import make_container, separator, subtle, text_block, thumbnail_section
+from bot.ui.copy import DEPLOY_NOTIFICATION
 
 if TYPE_CHECKING:
     from bot.event_cog import RobEventCog
 
-log = logging.getLogger(__name__)
 
-
-# ─── Helpers ──────────────────────────────────────────────────────────────────
 def _medal(rank: int) -> str:
     return {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"**#{rank}**")
 
@@ -38,11 +23,18 @@ def format_money(amount: float | None) -> str:
     return f"${amount:,.2f}"
 
 
-# ─── Modals ───────────────────────────────────────────────────────────────────
+def _send_suffix(count: int) -> str:
+    return "send" if count == 1 else "sends"
+
+
+def _render_rows(rows: list[tuple[str, float, int]]) -> str:
+    lines: list[str] = []
+    for index, (label, total, sends) in enumerate(rows, 1):
+        lines.append(f"{_medal(index)} {label}\n**{format_money(total)}** · {sends} {_send_suffix(sends)}")
+    return "\n\n".join(lines)
+
 
 class DommeSignupModal(discord.ui.Modal, title="Domme Sign-Up"):
-    """Modal that collects a Throne username or link."""
-
     throne_input: discord.ui.TextInput = discord.ui.TextInput(
         label="Throne username or link",
         placeholder="mistressxxx or https://throne.com/mistressxxx",
@@ -59,8 +51,6 @@ class DommeSignupModal(discord.ui.Modal, title="Domme Sign-Up"):
 
 
 class SubSignupModal(discord.ui.Modal, title="Sub Sign-Up"):
-    """Modal that collects the sub's Throne sending name."""
-
     name_input: discord.ui.TextInput = discord.ui.TextInput(
         label="Your Throne sending name",
         placeholder="The name you use on Throne",
@@ -76,413 +66,48 @@ class SubSignupModal(discord.ui.Modal, title="Sub Sign-Up"):
         await self.cog.process_sub_signup(interaction, self.name_input.value)
 
 
-class EventStartModal(discord.ui.Modal, title="Set Event End Time"):
-    """Modal that collects the event end date and time."""
-
-    date_input: discord.ui.TextInput = discord.ui.TextInput(
-        label="End date (YYYY-MM-DD)",
-        placeholder="2025-05-12",
-        min_length=10,
-        max_length=10,
-    )
-    time_input: discord.ui.TextInput = discord.ui.TextInput(
-        label="End time (HH:MM — 24 h, AEST/Sydney)",
-        placeholder="23:59",
-        min_length=5,
-        max_length=5,
-    )
-
-    def __init__(self, cog: RobEventCog) -> None:
-        super().__init__(timeout=300)
-        self.cog = cog
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        await self.cog.process_event_start_modal(
-            interaction,
-            end_date=self.date_input.value,
-            end_time=self.time_input.value,
-        )
-
-
-class ImportChannelsModal(discord.ui.Modal, title="Set Up — Channels & Guild"):
-    """Step 1 of 2: channel IDs and guild ID."""
-
-    guild_id_field: discord.ui.TextInput = discord.ui.TextInput(
-        label="Guild (Server) ID",
-        placeholder="Right-click the server → Copy Server ID",
-        min_length=17,
-        max_length=20,
-    )
-    reg_channel: discord.ui.TextInput = discord.ui.TextInput(
-        label="Registration Channel ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-    lb_channel: discord.ui.TextInput = discord.ui.TextInput(
-        label="Leaderboard Channel ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-    send_channel: discord.ui.TextInput = discord.ui.TextInput(
-        label="Send-Track Channel ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-    mod_role: discord.ui.TextInput = discord.ui.TextInput(
-        label="Moderation Role ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-
-    def __init__(self, cog: RobEventCog, prefill_guild_id: int) -> None:
-        super().__init__(timeout=300)
-        self.cog = cog
-        if prefill_guild_id:
-            self.guild_id_field.default = str(prefill_guild_id)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            guild_id = int(self.guild_id_field.value.strip())
-            reg = int(self.reg_channel.value.strip())
-            lb = int(self.lb_channel.value.strip())
-            send = int(self.send_channel.value.strip())
-            mod = int(self.mod_role.value.strip())
-        except ValueError:
-            await interaction.response.send_message(
-                "Discord IDs are long angry numbers. Try again.", ephemeral=True
-            )
-            return
-        await interaction.response.send_modal(
-            ImportRolesModal(
-                self.cog,
-                guild_id=guild_id,
-                registration_channel_id=reg,
-                leaderboard_channel_id=lb,
-                send_track_channel_id=send,
-                moderation_role_id=mod,
-            )
-        )
-
-
-class ImportRolesModal(discord.ui.Modal, title="Set Up — Roles"):
-    """Step 2 of 2: role IDs."""
-
-    domme_role: discord.ui.TextInput = discord.ui.TextInput(
-        label="Domme Role ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-    sub_role: discord.ui.TextInput = discord.ui.TextInput(
-        label="Submissive Role ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-    ban_role: discord.ui.TextInput = discord.ui.TextInput(
-        label="Event Ban Role ID (optional — leave blank to skip)",
-        placeholder="1234567890123456789",
-        required=False,
-        max_length=20,
-    )
-
-    def __init__(
-        self,
-        cog: RobEventCog,
-        *,
-        guild_id: int,
-        registration_channel_id: int,
-        leaderboard_channel_id: int,
-        send_track_channel_id: int,
-        moderation_role_id: int,
-    ) -> None:
-        super().__init__(timeout=300)
-        self.cog = cog
-        self._guild_id = guild_id
-        self._registration_channel_id = registration_channel_id
-        self._leaderboard_channel_id = leaderboard_channel_id
-        self._send_track_channel_id = send_track_channel_id
-        self._moderation_role_id = moderation_role_id
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            domme = int(self.domme_role.value.strip())
-            sub = int(self.sub_role.value.strip())
-        except ValueError:
-            await interaction.response.send_message(
-                "Role IDs are long angry numbers. Try again.", ephemeral=True
-            )
-            return
-        ban_str = self.ban_role.value.strip()
-        ban = int(ban_str) if ban_str.isdigit() else 0
-        await self.cog.save_config_ids(
-            interaction=interaction,
-            guild_id=self._guild_id,
-            registration_channel_id=self._registration_channel_id,
-            leaderboard_channel_id=self._leaderboard_channel_id,
-            send_track_channel_id=self._send_track_channel_id,
-            moderation_role_id=self._moderation_role_id,
-            domme_role_id=domme,
-            submissive_role_id=sub,
-            event_ban_role_id=ban,
-        )
-
-
-# ─── Command-response LayoutViews ─────────────────────────────────────────────
-
-class EventStartPromptView(discord.ui.LayoutView):
-    """Sent in reply to !event start — button opens EventStartModal."""
-
-    def __init__(self, cog: RobEventCog, *, owner_id: int) -> None:
-        super().__init__(timeout=900)
-        self.cog = cog
-        self.owner_id = owner_id
-
-        btn = discord.ui.Button(
-            label="Set End Time",
-            style=discord.ButtonStyle.primary,
-            emoji="🗓️",
-        )
-        btn.callback = self._set_end_time
-
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    f"## 🚀 Fire Up the Chaos Machine\n\n"
-                    f"Set when **{cog.config.event_name}** ends.\n"
-                    "Times are Sydney time, so nobody launches this into yesterday."
-                ),
-                discord.ui.Separator(),
-                discord.ui.Section(
-                    "Pick the end time.",
-                    accessory=btn,
-                ),
-                accent_color=PURPLE,
-            )
-        )
-
-    async def _set_end_time(self, interaction: discord.Interaction) -> None:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                NOT_YOURS,
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_modal(EventStartModal(self.cog))
-
-
-class EventEndConfirmView(discord.ui.LayoutView):
-    """Sent in reply to !event end — two in-card buttons: confirm or cancel."""
-
-    def __init__(self, cog: RobEventCog, *, owner_id: int) -> None:
-        super().__init__(timeout=900)
-        self.cog = cog
-        self.owner_id = owner_id
-
-        end_btn = discord.ui.Button(
-            label="End Event",
-            style=discord.ButtonStyle.danger,
-            emoji="⛔",
-        )
-        end_btn.callback = self._end_event
-
-        cancel_btn = discord.ui.Button(
-            label="Cancel",
-            style=discord.ButtonStyle.secondary,
-        )
-        cancel_btn.callback = self._cancel
-
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    f"## ⚠️ End Event Early?\n\n"
-                    f"This ends **{cog.config.event_name}** right now.\n"
-                    "The leaderboards freeze. No undo."
-                ),
-                discord.ui.Separator(),
-                discord.ui.Section("Confirm ending the event immediately.", accessory=end_btn),
-                discord.ui.Section("Changed your mind? Back away slowly.", accessory=cancel_btn),
-                accent_color=RED,
-            )
-        )
-
-    async def _end_event(self, interaction: discord.Interaction) -> None:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                NOT_YOURS,
-                ephemeral=True,
-            )
-            return
-        await self.cog.process_event_end(interaction)
-
-    async def _cancel(self, interaction: discord.Interaction) -> None:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                NOT_YOURS,
-                ephemeral=True,
-            )
-            return
-        self.stop()
-        await interaction.response.edit_message(
-            view=info_view("Cancelled.", "Crisis avoided."),
-        )
-
-
-class ImportPromptView(discord.ui.LayoutView):
-    """Sent in reply to !import — button opens ImportChannelsModal."""
-
-    def __init__(self, cog: RobEventCog, *, owner_id: int, guild_id: int) -> None:
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.owner_id = owner_id
-        self.guild_id = guild_id
-
-        btn = discord.ui.Button(
-            label="Configure IDs",
-            style=discord.ButtonStyle.primary,
-            emoji="⚙️",
-        )
-        btn.callback = self._configure
-
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "## ⚙️ Configure Channel & Role IDs\n\n"
-                    "Two forms. A few IDs. Rob does the filing."
-                ),
-                discord.ui.Separator(),
-                discord.ui.Section("Open the forms.", accessory=btn),
-                accent_color=BLUE,
-            )
-        )
-
-    async def _configure(self, interaction: discord.Interaction) -> None:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                NOT_YOURS,
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_modal(
-            ImportChannelsModal(self.cog, prefill_guild_id=self.guild_id)
-        )
-
-
-# ─── Leaderboard channel views (no buttons — auto-updated, timeout=None) ──────
-
-class SubLeaderboardView(discord.ui.LayoutView):
-    """Message 1 in the leaderboard channel: sub rankings + event status."""
-
+class LeaderboardView(discord.ui.LayoutView):
     def __init__(
         self,
         *,
-        event_name: str,
-        state: object,  # EventState
-        rows: list[tuple[str, float, int]],   # (mention, total_usd, send_count)
-        unclaimed_total: float,
+        title: str,
+        board_title: str,
+        status_lines: list[str],
+        rows: list[tuple[str, float, int]],
+        empty_message: str,
+        accent_color: discord.Colour | int,
+        helper_lines: list[str] | None = None,
+        footer: str | None = None,
     ) -> None:
         super().__init__(timeout=None)
 
-        # ── Status line ──────────────────────────────────────────────────────
-        is_active = getattr(state, "is_active", False)
-        ends_at_iso = getattr(state, "ends_at", None)
-        ended_at_iso = getattr(state, "ended_at", None)
-
-        if is_active and ends_at_iso:
-            try:
-                ts = int(datetime.fromisoformat(ends_at_iso).timestamp())
-                status = f"🟢 Active — ends <t:{ts}:R>"
-            except ValueError:
-                status = "🟢 Active"
-        elif ended_at_iso:
-            try:
-                ts = int(datetime.fromisoformat(ended_at_iso).timestamp())
-                status = f"🔴 Event ended <t:{ts}:F>"
-            except ValueError:
-                status = "🔴 Event ended"
-        else:
-            status = "⚪ Event not started yet"
-
-        # ── Rankings text ─────────────────────────────────────────────────────
-        if rows:
-            lines: list[str] = []
-            for i, (mention, total, sends) in enumerate(rows, 1):
-                suffix = "send" if sends == 1 else "sends"
-                lines.append(
-                    f"{_medal(i)} {mention} — **{format_money(total)}** ({sends} {suffix})"
-                )
-            rankings_text = "\n".join(lines)
-            if len(rows) >= 20:
-                rankings_text += (
-                    "\n\n-# Top 20 only. Register if you want in."
-                )
-        else:
-            rankings_text = (
-                f"{EMPTY_LEADERBOARD}\n"
-                "-# Subs: use `/register action:sub` to link your Throne name."
-            )
-
-        # ── Build container ───────────────────────────────────────────────────
-        components: list[discord.ui.Item] = [
-            discord.ui.TextDisplay(f"## 🏆 {event_name} — Sub Leaderboard\n{status}"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay(rankings_text),
+        sections: list[discord.ui.Item] = [
+            separator(),
+            text_block(f"### {board_title}\n\n" + "\n".join(status_lines)),
+            separator(),
+            text_block(_render_rows(rows) if rows else empty_message),
         ]
-        if unclaimed_total > 0.01:
-            components.append(discord.ui.Separator())
-            components.append(
-                discord.ui.TextDisplay(
-                    f"-# 💬 {format_money(unclaimed_total)} is unclaimed. "
-                    "Those subs have not registered yet."
-                )
-            )
-
-        self.add_item(discord.ui.Container(*components, accent_color=PURPLE))
-
-
-class DommeTotalsView(discord.ui.LayoutView):
-    """Message 2 in the leaderboard channel: domme totals."""
-
-    def __init__(
-        self,
-        *,
-        rows: list[tuple[str, float, int]],   # (mention, total_usd, send_count)
-    ) -> None:
-        super().__init__(timeout=None)
-
-        if rows:
-            lines: list[str] = []
-            for i, (mention, total, sends) in enumerate(rows, 1):
-                suffix = "send" if sends == 1 else "sends"
-                lines.append(
-                    f"{_medal(i)} {mention} — **{format_money(total)}** ({sends} {suffix})"
-                )
-            totals_text = "\n".join(lines)
-        else:
-            totals_text = "No sends. No drama. Weird."
+        if helper_lines:
+            sections.extend([separator()])
+            sections.extend(subtle(line) for line in helper_lines if line)
 
         self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay("## 🌸 Domme Totals"),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(totals_text),
-                accent_color=BLUE,
+            make_container(
+                title,
+                None,
+                sections=sections,
+                footer=footer,
+                accent_color=accent_color,
             )
         )
 
-
-# ─── Send-track channel view ───────────────────────────────────────────────────
 
 class SendNotificationView(discord.ui.LayoutView):
-    """Posted to the send-track channel when a new Throne send is detected."""
-
     def __init__(
         self,
         *,
+        title: str,
+        accent_color: discord.Colour | int,
         sub_label: str,
         domme_label: str,
         amount_label: str,
@@ -490,76 +115,208 @@ class SendNotificationView(discord.ui.LayoutView):
         item_image_url: str | None,
         sub_rank: int | None,
         domme_send_count: int,
+        rank_label: str,
     ) -> None:
         super().__init__(timeout=None)
+
+        detail_lines = [
+            f"**Sub**\n{sub_label}",
+            f"**Domme**\n{domme_label}",
+            f"**Amount**\n{amount_label}",
+        ]
+        if item_name:
+            detail_lines.append(f"**Item**\n{item_name}")
+        detail_text = "\n".join(detail_lines)
+
+        sections: list[discord.ui.Item] = [separator()]
+        if item_image_url:
+            sections.append(thumbnail_section(detail_text, item_image_url))
+        else:
+            sections.append(text_block(detail_text))
+
+        footer_bits: list[str] = [f"Domme total sends: **{domme_send_count}**"]
+        if sub_rank is not None:
+            footer_bits.insert(0, f"{rank_label}: **#{sub_rank}**")
+        sections.extend([separator(), subtle(" · ".join(footer_bits))])
+
         self.add_item(
-            send_notification_card(
-                sub_label=sub_label,
-                domme_label=domme_label,
-                amount_label=amount_label,
-                item_name=item_name,
-                item_image_url=item_image_url,
-                sub_rank=sub_rank,
-                domme_send_count=domme_send_count,
+            make_container(
+                title,
+                None,
+                sections=sections,
+                accent_color=accent_color,
             )
         )
 
 
-# ─── Event status view (ephemeral reply to !event status) ─────────────────────
-
 class EventStatusView(discord.ui.LayoutView):
-    """Ephemeral reply to !event status."""
-
     def __init__(
         self,
         *,
-        event_name: str,
-        state: object,   # EventState
+        source_path: str,
+        current_mode: str,
+        default_theme_label: str,
+        configured_events: list[str],
         domme_count: int,
         sub_count: int,
-        send_count: int,
-        send_total_usd: float,
+        live_send_count: int,
+        live_send_total: str,
     ) -> None:
         super().__init__(timeout=60)
 
-        is_active = getattr(state, "is_active", False)
-        ends_at_iso = getattr(state, "ends_at", None)
-        ended_at_iso = getattr(state, "ended_at", None)
-
-        if is_active and ends_at_iso:
-            try:
-                ts = int(datetime.fromisoformat(ends_at_iso).timestamp())
-                status_line = f"🟢 **Active** — ends <t:{ts}:R> (<t:{ts}:F>)"
-            except ValueError:
-                status_line = "🟢 **Active**"
-        elif ended_at_iso:
-            try:
-                ts = int(datetime.fromisoformat(ended_at_iso).timestamp())
-                status_line = f"🔴 **Ended** <t:{ts}:F>"
-            except ValueError:
-                status_line = "🔴 **Ended**"
-        else:
-            status_line = "⚪ **Not started**"
-
+        event_block = "\n".join(configured_events) if configured_events else "No event rows loaded."
         self.add_item(
-            event_status_card(
-                event_name=event_name,
-                status_line=status_line,
-                domme_count=domme_count,
-                sub_count=sub_count,
-                send_count=send_count,
-                send_total_usd=format_money(send_total_usd),
+            make_container(
+                "🗓️ Event Config",
+                "Events are driven from JSON now.",
+                sections=[
+                    separator(),
+                    text_block(f"**Config source**\n`{source_path}`"),
+                    text_block(f"**Current mode**\n{current_mode}"),
+                    text_block(f"**Default theme**\n{default_theme_label}"),
+                    text_block(f"**Configured events**\n{event_block}"),
+                    separator(),
+                    text_block(f"**Registrations**\n{domme_count} Dommes · {sub_count} Subs"),
+                    text_block(f"**Live totals**\n{live_send_count} sends · {live_send_total}"),
+                ],
+                footer="Edit the JSON, then reload or restart.",
+                accent_color=discord.Colour.blurple(),
             )
         )
 
 
-# ─── Owner DM: update notification ────────────────────────────────────────────
+class ThroneRefreshView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        ran: bool,
+        detail: str,
+        new_sends_found: int,
+        tracking_mode: str,
+        slow_retry_count: int,
+        page_cooldown_count: int,
+    ) -> None:
+        super().__init__(timeout=60)
+
+        page_status = (
+            f"Paused for **{page_cooldown_count}** profile"
+            f"{'' if page_cooldown_count == 1 else 's'}"
+            if page_cooldown_count
+            else "Live"
+        )
+        retry_status = (
+            f"{slow_retry_count} profile{' is' if slow_retry_count == 1 else 's are'} in slow retry"
+            if slow_retry_count
+            else "No slow retry backlog."
+        )
+
+        self.add_item(
+            make_container(
+                "👑 Throne Refresh",
+                detail,
+                sections=[
+                    separator(),
+                    text_block(f"**Refresh**\n{'Ran' if ran else 'Skipped'}"),
+                    text_block(f"**New sends found**\n**{new_sends_found}**"),
+                    text_block(f"**Tracking mode**\n{tracking_mode}"),
+                    text_block(f"**Page enrichment**\n{page_status}"),
+                    text_block(f"**Cooldowns**\n{retry_status}"),
+                ],
+                accent_color=discord.Colour.gold(),
+                footer="One manual cycle. No dramatic overpulling.",
+            )
+        )
+
+
+class ThroneStatusView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        tracking_state: str,
+        current_event: str,
+        tracked_dommes: int,
+        poll_interval_seconds: int,
+        per_domme_delay_seconds: float,
+        slow_retry_count: int,
+        page_cooldown_count: int,
+        last_poll_at: str,
+        last_successful_poll_at: str,
+        last_manual_refresh_at: str,
+        last_error: str,
+    ) -> None:
+        super().__init__(timeout=60)
+
+        self.add_item(
+            make_container(
+                "👑 Throne Tracking Status",
+                None,
+                sections=[
+                    separator(),
+                    text_block(f"**Tracking**\n{tracking_state}"),
+                    text_block(f"**Current event**\n{current_event}"),
+                    text_block(f"**Registered Dommes**\n{tracked_dommes}"),
+                    text_block(f"**Poll interval**\n{poll_interval_seconds} seconds"),
+                    text_block(f"**Per-Domme delay**\n{per_domme_delay_seconds:g} seconds"),
+                    text_block(
+                        "**Cooldowns**\n"
+                        f"{page_cooldown_count} page enrichment cooldown"
+                        f"{'' if page_cooldown_count == 1 else 's'}\n"
+                        f"{slow_retry_count} profile{' is' if slow_retry_count == 1 else 's are'} in slow retry"
+                    ),
+                    text_block(f"**Last poll**\n{last_poll_at}"),
+                    text_block(f"**Last successful poll**\n{last_successful_poll_at}"),
+                    text_block(f"**Last manual refresh**\n{last_manual_refresh_at}"),
+                    text_block(f"**Last error**\n{last_error}"),
+                ],
+                accent_color=discord.Colour.gold(),
+                footer="Powered by vibes and SQLite.",
+            )
+        )
+
+
+class FinalReportSummaryView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        title: str,
+        accent_color: discord.Colour | int,
+        event_key: str,
+        started_at: str,
+        ended_at: str,
+        total_send_amount: str,
+        total_send_count: int,
+        dommes_ranked: int,
+        subs_ranked: int,
+        unclaimed_total: str,
+        generated_at: str,
+    ) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            make_container(
+                title,
+                None,
+                sections=[
+                    separator(),
+                    text_block(f"**Event key**\n`{event_key}`"),
+                    text_block(f"**Event window**\nStarted: {started_at}\nEnded: {ended_at}"),
+                    text_block(
+                        "**Summary**\n"
+                        f"Total tracked: **{total_send_amount}**\n"
+                        f"Sends recorded: **{total_send_count}**\n"
+                        f"Dommes ranked: **{dommes_ranked}**\n"
+                        f"Subs ranked: **{subs_ranked}**\n"
+                        f"Unclaimed: **{unclaimed_total}**"
+                    ),
+                ],
+                accent_color=accent_color,
+                footer=f"Generated {generated_at}",
+            )
+        )
+
 
 class UpdateNotificationView(discord.ui.LayoutView):
-    """DM'd to the bot owner on every startup. Acknowledge button dismisses it."""
-
     def __init__(self) -> None:
-        super().__init__(timeout=86400)  # 24 h — not persistent, new one sent each restart
+        super().__init__(timeout=86400)
 
         now_ts = int(datetime.now(timezone.utc).timestamp())
 
@@ -571,15 +328,17 @@ class UpdateNotificationView(discord.ui.LayoutView):
         ack_btn.callback = self._acknowledge
 
         self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    f"## ✅ {DEPLOY_NOTIFICATION}\n\n"
+            make_container(
+                f"✅ {DEPLOY_NOTIFICATION}",
+                (
                     f"Rob came back online <t:{now_ts}:R>.\n"
                     "Latest code should be live now."
                 ),
-                discord.ui.Separator(),
-                discord.ui.Section("Dismiss this tiny announcement.", accessory=ack_btn),
-                accent_color=GOLD,
+                sections=[
+                    separator(),
+                    discord.ui.Section("Dismiss this tiny announcement.", accessory=ack_btn),
+                ],
+                accent_color=discord.Colour.gold(),
             )
         )
 

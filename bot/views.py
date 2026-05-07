@@ -1385,7 +1385,7 @@ class SubSetupOwnerView(SubSetupView):
 
 
 # ---------------------------------------------------------------------------
-# !import — file-upload flow to configure channel/role IDs in-Discord
+# Legacy ID import helper (currently unused by the live runtime)
 # ---------------------------------------------------------------------------
 
 _IMPORT_FIELD_NAMES = (

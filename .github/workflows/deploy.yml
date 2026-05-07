@@ -4,33 +4,70 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+concurrency:
+  group: rob-the-bot-deploy
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate deploy secrets
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_HOST DEPLOY_KNOWN_HOSTS DEPLOY_PORT DEPLOY_SSH_KEY DEPLOY_USER; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required GitHub Actions secret: ${name}"
+              exit 1
+            fi
+          done
+
       - name: Configure SSH
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
-      - name: Deploy Rob
+      - name: Sync repository to server
         run: |
-          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" <<'EOF'
+          set -euo pipefail
+          rsync -az --delete \
+            --exclude '.env' \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.venv/' \
+            --exclude '__pycache__/' \
+            --exclude 'data/' \
+            -e "ssh -i ~/.ssh/deploy_key -p ${DEPLOY_PORT}" \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/rob-the-bot/app/"
+
+      - name: Restart Rob on server
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" <<'EOF'
             set -euo pipefail
             cd /opt/rob-the-bot/app
-            sudo systemctl stop rob-the-bot
-            trap 'status=$?; if [[ ${status} -ne 0 ]]; then sudo systemctl start rob-the-bot || true; fi; exit ${status}' EXIT
-            git remote set-url origin https://github.com/notpatdev/rob-the-bot.git
-            git pull --ff-only origin main
+            if [ ! -x .venv/bin/python ]; then
+              python3.11 -m venv .venv
+            fi
             ./.venv/bin/python -m pip install --upgrade pip
             ./.venv/bin/pip install -r requirements.txt
             sudo install -m 0644 rob-the-bot.service /etc/systemd/system/rob-the-bot.service
             sudo systemctl daemon-reload
-            sudo systemctl start rob-the-bot
-            trap - EXIT
+            sudo systemctl restart rob-the-bot
+            sudo systemctl --no-pager --full status rob-the-bot
           EOF

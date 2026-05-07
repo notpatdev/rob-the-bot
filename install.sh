@@ -62,12 +62,12 @@ fi
 
 section "Rob the Bot — installer"
 warn "Installing to ${APP_ROOT} — running as ${RUNTIME_USER}."
-warn "After install, use  !import id  in Discord to set channel/role IDs."
+warn "Discord IDs now come from bot/channels.py, and event windows come from config/events.json."
 
 # ── 1. System packages ────────────────────────────────────────────────────────
 step "1/7  System packages"
 apt-get update -qq
-apt-get install -y -qq git python3 python3-venv python3-pip openssh-client software-properties-common >/dev/null 2>&1
+apt-get install -y -qq git python3 python3-venv python3-pip openssh-client rsync software-properties-common >/dev/null 2>&1
 
 if ! command -v python3.11 >/dev/null 2>&1; then
   if [[ -r /etc/os-release ]]; then
@@ -198,9 +198,10 @@ echo "  sudo systemctl restart ${SERVICE_NAME}"
 echo "  sudo journalctl -u ${SERVICE_NAME} -f"
 echo
 printf '%sNext steps%s\n' "${BOLD}" "${RESET}"
-echo "  1. In Discord, run:   !import id"
-echo "     The bot will open a form — paste your server's channel and role IDs."
-echo "  2. Add the GitHub Actions secrets below to your repository."
+echo "  1. Put your Discord IDs in bot/channels.py."
+echo "  2. Set event windows and themes in config/events.json."
+echo "  3. Add the GitHub Actions secrets below to your repository."
+echo "  4. Push to main or run the Deploy workflow manually."
 echo
 section "GitHub Actions secrets"
 printf '%sGo to:%s  https://github.com/notpatdev/rob-the-bot/settings/secrets/actions\n' "${CYAN}" "${RESET}"
@@ -221,4 +222,4 @@ echo
 printf '%s%s%s\n' "${BOLD}" "DEPLOY_USER" "${RESET}"
 printf '  %s\n' "${DEPLOY_USER}"
 echo
-warn "Keep the private key secret. The bot owner DM is triggered on every restart."
+warn "Keep the private key secret. Deploys now sync files over SSH and restart the service on the box."

@@ -55,6 +55,19 @@ class ScrapedSend:
     sent_at: str  # ISO-8601 UTC
 
 
+@dataclass(frozen=True)
+class PageFetchResult:
+    sends: list[ScrapedSend] | None
+    status: str
+
+
+@dataclass(frozen=True)
+class RecentSendsFetchResult:
+    sends: list[ScrapedSend] | None
+    overlay_succeeded: bool
+    page_status: str
+
+
 _NEXT_DATA_RE = re.compile(
     r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>',
     re.DOTALL,
@@ -189,6 +202,23 @@ async def fetch_recent_sends(
     user_agent: str,
     timeout_seconds: float = 10.0,
 ) -> list[ScrapedSend] | None:
+    result = await fetch_recent_sends_with_status(
+        throne_url,
+        http=http,
+        user_agent=user_agent,
+        timeout_seconds=timeout_seconds,
+    )
+    return result.sends
+
+
+async def fetch_recent_sends_with_status(
+    throne_url: str,
+    *,
+    http: aiohttp.ClientSession,
+    user_agent: str,
+    timeout_seconds: float = 10.0,
+    allow_page_enrichment: bool = True,
+) -> RecentSendsFetchResult:
     """Fetch recent sends for a Throne profile.
 
     Returns ``None`` on HTTP / network / parse failure, and ``[]`` when the
@@ -203,26 +233,43 @@ async def fetch_recent_sends(
         timeout_seconds=timeout_seconds,
     )
     page_sends: list[ScrapedSend] | None = None
-    should_fetch_page = overlay_sends is None or any(
+    page_status = "skipped"
+    should_fetch_page = allow_page_enrichment and normalized is not None and (
+        overlay_sends is None or any(
         send.amount_usd is None for send in overlay_sends
+        )
     )
 
-    if normalized is not None and should_fetch_page:
-        page_sends = await _fetch_page_sends(
+    if should_fetch_page:
+        page_result = await _fetch_page_sends(
             normalized,
             http=http,
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
         )
-    elif overlay_sends is None:
+        page_sends = page_result.sends
+        page_status = page_result.status
+    elif overlay_sends is None and normalized is None:
         log.warning("Skipping unrecognised Throne URL: %r", throne_url)
-        return None
+        return RecentSendsFetchResult(sends=None, overlay_succeeded=False, page_status="skipped")
 
     if overlay_sends is not None:
         if page_sends:
-            return _merge_overlay_and_page_sends(overlay_sends, page_sends)
-        return overlay_sends
-    return page_sends
+            return RecentSendsFetchResult(
+                sends=_merge_overlay_and_page_sends(overlay_sends, page_sends),
+                overlay_succeeded=True,
+                page_status=page_status,
+            )
+        return RecentSendsFetchResult(
+            sends=overlay_sends,
+            overlay_succeeded=True,
+            page_status=page_status,
+        )
+    return RecentSendsFetchResult(
+        sends=page_sends,
+        overlay_succeeded=False,
+        page_status=page_status,
+    )
 
 
 async def fetch_recent_overlay_sends(
@@ -271,7 +318,7 @@ async def _fetch_page_sends(
     http: aiohttp.ClientSession,
     user_agent: str,
     timeout_seconds: float,
-) -> list[ScrapedSend] | None:
+) -> PageFetchResult:
     headers = {
         "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -280,21 +327,21 @@ async def _fetch_page_sends(
     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
     try:
         async with http.get(normalized_url, headers=headers, timeout=timeout) as resp:
+            if resp.status == 429:
+                return PageFetchResult(sends=None, status="rate_limited")
             if resp.status != 200:
-                log.warning(
-                    "Throne page %s returned HTTP %s", normalized_url, resp.status
-                )
-                return None
+                log.warning("Throne page %s returned HTTP %s", normalized_url, resp.status)
+                return PageFetchResult(sends=None, status=f"http_{resp.status}")
             html = await resp.text()
     except (aiohttp.ClientError, TimeoutError) as exc:
         log.warning("Failed to fetch Throne page %s: %s", normalized_url, exc)
-        return None
+        return PageFetchResult(sends=None, status="request_failed")
 
     try:
-        return parse_sends_from_html(html)
+        return PageFetchResult(sends=parse_sends_from_html(html), status="ok")
     except Exception:  # noqa: BLE001 - never let parsing kill the poller
         log.exception("Failed to parse Throne page %s", normalized_url)
-        return None
+        return PageFetchResult(sends=None, status="parse_failed")
 
 
 def _merge_overlay_and_page_sends(

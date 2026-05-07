@@ -22,6 +22,12 @@ class EventDommeTotalRow:
 
 
 @dataclass(frozen=True)
+class SendSummary:
+    total_usd: float
+    send_count: int
+
+
+@dataclass(frozen=True)
 class EventDommeRegistration:
     user_id: int
     throne_url: str
@@ -53,22 +59,28 @@ class EventSubRegistration:
 
 @dataclass(frozen=True)
 class EventState:
+    event_key: str
+    event_name: str | None
     is_active: bool
     starts_at: str | None
     ends_at: str | None
     ended_at: str | None
     started_by: int | None
     ended_by: int | None
+    report_posted_at: str | None
 
     @classmethod
     def from_row(cls, row: aiosqlite.Row) -> "EventState":
         return cls(
+            event_key=row["event_key"],
+            event_name=row["event_name"] if "event_name" in row.keys() else None,
             is_active=bool(row["is_active"]),
             starts_at=row["starts_at"],
             ends_at=row["ends_at"],
             ended_at=row["ended_at"],
             started_by=int(row["started_by"]) if row["started_by"] is not None else None,
             ended_by=int(row["ended_by"]) if row["ended_by"] is not None else None,
+            report_posted_at=row["report_posted_at"] if "report_posted_at" in row.keys() else None,
         )
 
 
@@ -86,6 +98,7 @@ class EventSend:
     external_id: str | None
     is_private: bool
     seeded: bool
+    event_key: str | None
 
     @classmethod
     def from_row(cls, row: aiosqlite.Row) -> "EventSend":
@@ -102,6 +115,7 @@ class EventSend:
             external_id=row["external_id"],
             is_private=bool(row["is_private"]),
             seeded=bool(row["seeded"]),
+            event_key=row["event_key"] if "event_key" in row.keys() else None,
         )
 
 
@@ -109,16 +123,19 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_CONFIG_INT_KEYS = frozenset({
-    "guild_id",
-    "registration_channel_id",
-    "leaderboard_channel_id",
-    "send_track_channel_id",
-    "moderation_role_id",
-    "domme_role_id",
-    "submissive_role_id",
-    "event_ban_role_id",
-})
+_CONFIG_INT_KEYS = frozenset(
+    {
+        "guild_id",
+        "registration_channel_id",
+        "leaderboard_channel_id",
+        "send_track_channel_id",
+        "event_report_channel_id",
+        "moderation_role_id",
+        "domme_role_id",
+        "submissive_role_id",
+        "event_ban_role_id",
+    }
+)
 
 
 class Database:
@@ -149,12 +166,14 @@ class Database:
 
             CREATE TABLE IF NOT EXISTS event_state (
                 event_key TEXT PRIMARY KEY,
+                event_name TEXT,
                 is_active INTEGER NOT NULL DEFAULT 0,
                 starts_at TEXT,
                 ends_at TEXT,
                 ended_at TEXT,
                 started_by INTEGER,
-                ended_by INTEGER
+                ended_by INTEGER,
+                report_posted_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS event_dommes (
@@ -181,7 +200,8 @@ class Database:
                 sent_at TEXT NOT NULL,
                 external_id TEXT,
                 is_private INTEGER NOT NULL DEFAULT 0,
-                seeded INTEGER NOT NULL DEFAULT 0
+                seeded INTEGER NOT NULL DEFAULT 0,
+                event_key TEXT
             );
 
             CREATE UNIQUE INDEX IF NOT EXISTS idx_event_sends_external_id
@@ -194,13 +214,49 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_event_sends_sub
             ON event_sends(sub_name);
 
+            CREATE INDEX IF NOT EXISTS idx_event_sends_event_key
+            ON event_sends(event_key);
+
             CREATE TABLE IF NOT EXISTS bot_config (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
             """
         )
+        await self._migrate_schema()
         await self.connection.commit()
+
+    async def _migrate_schema(self) -> None:
+        await self._ensure_column("event_state", "event_name", "TEXT")
+        await self._ensure_column("event_state", "report_posted_at", "TEXT")
+        await self._ensure_column("event_sends", "event_key", "TEXT")
+        await self._ensure_column("bot_config", "value", "TEXT NOT NULL", allow_existing=True)
+        await self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_event_sends_event_key
+            ON event_sends(event_key)
+            """
+        )
+
+    async def _column_names(self, table_name: str) -> set[str]:
+        async with self.connection.execute(f"PRAGMA table_info({table_name})") as cursor:
+            rows = await cursor.fetchall()
+        return {str(row["name"]) for row in rows}
+
+    async def _ensure_column(
+        self,
+        table_name: str,
+        column_name: str,
+        column_type: str,
+        *,
+        allow_existing: bool = False,
+    ) -> None:
+        columns = await self._column_names(table_name)
+        if column_name in columns:
+            return
+        if allow_existing and not columns:
+            return
+        await self.connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
     async def close(self) -> None:
         if self._connection is not None:
@@ -212,21 +268,22 @@ class Database:
         *,
         limit: int = 10,
         offset: int = 0,
+        event_key: str | None = None,
     ) -> list[EventSubTotalRow]:
-        async with self.connection.execute(
-            """
+        where_sql, params = self._event_filter(event_key)
+        query = f"""
             SELECT
                 claimed_sub_user_id AS user_id,
                 SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END) AS total_usd,
                 COUNT(*) AS send_count
             FROM event_sends
             WHERE claimed_sub_user_id IS NOT NULL
+            {where_sql}
             GROUP BY claimed_sub_user_id
             ORDER BY total_usd DESC, send_count DESC, claimed_sub_user_id ASC
             LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        ) as cursor:
+        """
+        async with self.connection.execute(query, (*params, limit, offset)) as cursor:
             rows = await cursor.fetchall()
         return [
             EventSubTotalRow(
@@ -262,7 +319,7 @@ class Database:
             SELECT user_id, throne_url, registered_at
             FROM event_dommes
             ORDER BY registered_at ASC
-            """,
+            """
         ) as cursor:
             rows = await cursor.fetchall()
         return [EventDommeRegistration.from_row(row) for row in rows]
@@ -284,7 +341,6 @@ class Database:
             (user_id, sub_name, _utc_now()),
         ):
             pass
-        await self.connection.commit()
         await self.connection.execute(
             """
             UPDATE event_sends
@@ -310,24 +366,30 @@ class Database:
             return None
         return EventSubRegistration.from_row(row)
 
-    async def count_event_ranked_subs(self) -> int:
-        async with self.connection.execute(
-            """
+    async def count_event_sub_registrations(self) -> int:
+        async with self.connection.execute("SELECT COUNT(*) AS count FROM event_subs") as cursor:
+            row = await cursor.fetchone()
+        return int(row["count"]) if row is not None else 0
+
+    async def count_event_ranked_subs(self, *, event_key: str | None = None) -> int:
+        where_sql, params = self._event_filter(event_key)
+        query = f"""
             SELECT COUNT(*) AS count
             FROM (
                 SELECT claimed_sub_user_id
                 FROM event_sends
                 WHERE claimed_sub_user_id IS NOT NULL
+                {where_sql}
                 GROUP BY claimed_sub_user_id
             )
-            """
-        ) as cursor:
+        """
+        async with self.connection.execute(query, params) as cursor:
             row = await cursor.fetchone()
         return int(row["count"]) if row is not None else 0
 
-    async def get_event_sub_rank(self, *, user_id: int) -> int | None:
-        async with self.connection.execute(
-            """
+    async def get_event_sub_rank(self, *, user_id: int, event_key: str | None = None) -> int | None:
+        where_sql, params = self._event_filter(event_key)
+        query = f"""
             SELECT rank FROM (
                 SELECT
                     claimed_sub_user_id AS user_id,
@@ -339,40 +401,43 @@ class Database:
                     ) AS rank
                 FROM event_sends
                 WHERE claimed_sub_user_id IS NOT NULL
+                {where_sql}
                 GROUP BY claimed_sub_user_id
             ) ranked
             WHERE user_id = ?
-            """,
-            (user_id,),
-        ) as cursor:
+        """
+        async with self.connection.execute(query, (*params, user_id)) as cursor:
             row = await cursor.fetchone()
         if row is None:
             return None
         return int(row["rank"])
 
-    async def get_event_unclaimed_total(self) -> float:
-        async with self.connection.execute(
-            """
+    async def get_event_unclaimed_total(self, *, event_key: str | None = None) -> float:
+        where_sql, params = self._event_filter(event_key)
+        query = f"""
             SELECT COALESCE(SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END), 0) AS total_usd
             FROM event_sends
             WHERE claimed_sub_user_id IS NULL
-            """
-        ) as cursor:
+            {where_sql}
+        """
+        async with self.connection.execute(query, params) as cursor:
             row = await cursor.fetchone()
         return float(row["total_usd"]) if row is not None else 0.0
 
-    async def get_event_domme_totals(self) -> list[EventDommeTotalRow]:
-        async with self.connection.execute(
-            """
+    async def get_event_domme_totals(self, *, event_key: str | None = None) -> list[EventDommeTotalRow]:
+        where_sql, params = self._event_filter(event_key)
+        query = f"""
             SELECT
                 domme_user_id AS user_id,
                 SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END) AS total_usd,
                 COUNT(*) AS send_count
             FROM event_sends
+            WHERE 1 = 1
+            {where_sql}
             GROUP BY domme_user_id
             ORDER BY total_usd DESC, send_count DESC, domme_user_id ASC
-            """
-        ) as cursor:
+        """
+        async with self.connection.execute(query, params) as cursor:
             rows = await cursor.fetchall()
         return [
             EventDommeTotalRow(
@@ -383,19 +448,24 @@ class Database:
             for row in rows
         ]
 
-    async def get_event_domme_total(self, *, user_id: int) -> EventDommeTotalRow:
-        async with self.connection.execute(
-            """
+    async def get_event_domme_total(
+        self,
+        *,
+        user_id: int,
+        event_key: str | None = None,
+    ) -> EventDommeTotalRow:
+        where_sql, params = self._event_filter(event_key)
+        query = f"""
             SELECT
                 domme_user_id AS user_id,
                 COALESCE(SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END), 0) AS total_usd,
                 COUNT(*) AS send_count
             FROM event_sends
             WHERE domme_user_id = ?
+            {where_sql}
             GROUP BY domme_user_id
-            """,
-            (user_id,),
-        ) as cursor:
+        """
+        async with self.connection.execute(query, (user_id, *params)) as cursor:
             row = await cursor.fetchone()
         if row is None:
             return EventDommeTotalRow(user_id=user_id, total_usd=0.0, send_count=0)
@@ -403,6 +473,23 @@ class Database:
             user_id=int(row["user_id"]),
             total_usd=float(row["total_usd"] or 0.0),
             send_count=int(row["send_count"]),
+        )
+
+    async def get_send_summary(self, *, event_key: str | None = None) -> SendSummary:
+        where_sql, params = self._event_filter(event_key)
+        query = f"""
+            SELECT
+                COALESCE(SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END), 0) AS total_usd,
+                COUNT(*) AS send_count
+            FROM event_sends
+            WHERE 1 = 1
+            {where_sql}
+        """
+        async with self.connection.execute(query, params) as cursor:
+            row = await cursor.fetchone()
+        return SendSummary(
+            total_usd=float(row["total_usd"] or 0.0) if row is not None else 0.0,
+            send_count=int(row["send_count"]) if row is not None else 0,
         )
 
     async def get_event_message(self, *, message_key: str) -> tuple[int, int] | None:
@@ -435,87 +522,138 @@ class Database:
             pass
         await self.connection.commit()
 
-    async def get_event_state(self) -> EventState:
+    async def get_active_event_state(self) -> EventState | None:
         async with self.connection.execute(
             """
-            SELECT is_active, starts_at, ends_at, ended_at, started_by, ended_by
+            SELECT event_key, event_name, is_active, starts_at, ends_at, ended_at, started_by, ended_by, report_posted_at
             FROM event_state
-            WHERE event_key = 'default'
-            """,
+            WHERE is_active = 1
+            ORDER BY starts_at ASC, event_key ASC
+            LIMIT 1
+            """
         ) as cursor:
             row = await cursor.fetchone()
         if row is None:
-            return EventState(
-                is_active=False,
-                starts_at=None,
-                ends_at=None,
-                ended_at=None,
-                started_by=None,
-                ended_by=None,
-            )
+            return None
         return EventState.from_row(row)
 
-    async def start_event(
+    async def get_event_state(self, *, event_key: str) -> EventState | None:
+        async with self.connection.execute(
+            """
+            SELECT event_key, event_name, is_active, starts_at, ends_at, ended_at, started_by, ended_by, report_posted_at
+            FROM event_state
+            WHERE event_key = ?
+            """,
+            (event_key,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return EventState.from_row(row)
+
+    async def get_pending_event_reports(self) -> list[EventState]:
+        async with self.connection.execute(
+            """
+            SELECT event_key, event_name, is_active, starts_at, ends_at, ended_at, started_by, ended_by, report_posted_at
+            FROM event_state
+            WHERE is_active = 0
+              AND ended_at IS NOT NULL
+              AND report_posted_at IS NULL
+            ORDER BY ended_at ASC, event_key ASC
+            """
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [EventState.from_row(row) for row in rows]
+
+    async def activate_event(
         self,
         *,
-        ends_at: str,
-        started_by: int,
+        event_key: str,
+        event_name: str,
+        starts_at: str | None,
+        ends_at: str | None,
+        started_by: int | None,
     ) -> EventState:
-        starts_at = _utc_now()
         async with self.connection.execute(
             """
             INSERT INTO event_state (
                 event_key,
+                event_name,
                 is_active,
                 starts_at,
                 ends_at,
                 ended_at,
                 started_by,
-                ended_by
+                ended_by,
+                report_posted_at
             )
-            VALUES ('default', 1, ?, ?, NULL, ?, NULL)
+            VALUES (?, ?, 1, ?, ?, NULL, ?, NULL, NULL)
             ON CONFLICT(event_key) DO UPDATE SET
+                event_name = excluded.event_name,
                 is_active = 1,
                 starts_at = excluded.starts_at,
                 ends_at = excluded.ends_at,
                 ended_at = NULL,
                 started_by = excluded.started_by,
-                ended_by = NULL
+                ended_by = NULL,
+                report_posted_at = NULL
             """,
-            (starts_at, ends_at, started_by),
+            (event_key, event_name, starts_at, ends_at, started_by),
         ):
             pass
         await self.connection.commit()
-        return await self.get_event_state()
+        state = await self.get_event_state(event_key=event_key)
+        if state is None:
+            raise RuntimeError(f"Failed to activate event state for {event_key}")
+        return state
 
     async def end_event(
         self,
         *,
+        event_key: str,
         ended_by: int | None,
+        ended_at: str | None = None,
     ) -> EventState:
-        ended_at = _utc_now()
+        ended_at_value = ended_at or _utc_now()
         async with self.connection.execute(
             """
             INSERT INTO event_state (
                 event_key,
+                event_name,
                 is_active,
                 starts_at,
                 ends_at,
                 ended_at,
                 started_by,
-                ended_by
+                ended_by,
+                report_posted_at
             )
-            VALUES ('default', 0, NULL, NULL, ?, NULL, ?)
+            VALUES (?, NULL, 0, NULL, NULL, ?, NULL, ?, NULL)
             ON CONFLICT(event_key) DO UPDATE SET
                 is_active = 0,
                 ended_at = excluded.ended_at,
                 ended_by = excluded.ended_by
             """,
-            (ended_at, ended_by),
+            (event_key, ended_at_value, ended_by),
         ):
             pass
         await self.connection.commit()
-        return await self.get_event_state()
+        state = await self.get_event_state(event_key=event_key)
+        if state is None:
+            raise RuntimeError(f"Failed to end event state for {event_key}")
+        return state
+
+    async def mark_event_report_posted(self, *, event_key: str, posted_at: str | None = None) -> None:
+        async with self.connection.execute(
+            """
+            UPDATE event_state
+            SET report_posted_at = ?
+            WHERE event_key = ?
+            """,
+            (posted_at or _utc_now(), event_key),
+        ):
+            pass
+        await self.connection.commit()
 
     async def log_event_send(
         self,
@@ -530,6 +668,7 @@ class Database:
         is_private: bool = False,
         seeded: bool = False,
         sent_at: str | None = None,
+        event_key: str | None = None,
     ) -> int | None:
         if external_id:
             async with self.connection.execute(
@@ -559,9 +698,10 @@ class Database:
                 sent_at,
                 external_id,
                 is_private,
-                seeded
+                seeded,
+                event_key
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 domme_user_id,
@@ -575,6 +715,7 @@ class Database:
                 external_id,
                 int(bool(is_private)),
                 int(bool(seeded)),
+                event_key,
             ),
         ) as cursor:
             send_id = int(cursor.lastrowid)
@@ -615,7 +756,6 @@ class Database:
             return await cursor.fetchone() is not None
 
     async def save_bot_config_ids(self, **kwargs: int) -> None:
-        """Persist integer config IDs into bot_config. Only known keys are written."""
         for key, value in kwargs.items():
             if key not in _CONFIG_INT_KEYS:
                 continue
@@ -632,13 +772,8 @@ class Database:
         await self.connection.commit()
 
     async def get_bot_config_ids(self) -> dict[str, int]:
-        """Return all stored integer config IDs."""
-        # _CONFIG_INT_KEYS contains only known safe string literals — this is
-        # safe to interpolate into the query as placeholder counts.
         async with self.connection.execute(
-            "SELECT key, value FROM bot_config WHERE key IN ({})".format(
-                ",".join("?" * len(_CONFIG_INT_KEYS))
-            ),
+            "SELECT key, value FROM bot_config WHERE key IN ({})".format(",".join("?" * len(_CONFIG_INT_KEYS))),
             tuple(_CONFIG_INT_KEYS),
         ) as cursor:
             rows = await cursor.fetchall()
@@ -650,6 +785,8 @@ class Database:
                 pass
         return result
 
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    @staticmethod
+    def _event_filter(event_key: str | None) -> tuple[str, tuple[object, ...]]:
+        if event_key is None:
+            return "", ()
+        return "AND event_key = ?", (event_key,)

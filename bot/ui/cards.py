@@ -386,7 +386,10 @@ def build_help_pages(
                     ROB_GREY.value,
                     "Admin bits. Button wrench included.",
                     (
-                        ("!import", "Import channel and role IDs from a file."),
+                        ("!throne refresh", "Run one manual Throne poll right now."),
+                        ("!throne status", "Show tracker health and cooldowns."),
+                        ("!event status", "Show loaded event config and current mode."),
+                        ("!event reload", "Reload `config/events.json`."),
                         ("/reaction_role_setup", "Create a reaction-role message."),
                         ("!resync [guild|clear|global]", "Re-sync slash commands."),
                     ),
