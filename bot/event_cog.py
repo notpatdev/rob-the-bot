@@ -506,33 +506,47 @@ class RobEventCog(commands.Cog):
         sub_rows_db = await self.database.get_event_sub_totals(limit=20, offset=0, event_key=event_key)
         domme_rows_db = await self.database.get_event_domme_totals(event_key=event_key)
         unclaimed_total = await self.database.get_event_unclaimed_total(event_key=event_key)
+        unclaimed_rows_db = await self.database.get_unclaimed_send_rows(limit=8, event_key=event_key)
 
         domme_rows = [(f"<@{row.user_id}>", row.total_usd, row.send_count) for row in domme_rows_db]
         sub_rows = [(f"<@{row.user_id}>", row.total_usd, row.send_count) for row in sub_rows_db]
+        unclaimed_rows = [(row.sub_name, row.total_usd, row.send_count) for row in unclaimed_rows_db]
 
         status_lines = self._leaderboard_status_lines(context)
-        domme_helper = ["Dommes with Throne tracking enabled will appear here after sends land."]
-        sub_helper = ["Subs: Use `/register action:sub` to link your Throne sending name."]
-        if unclaimed_total > 0.01:
-            sub_helper.append(f"Unclaimed total: **{format_money(unclaimed_total)}**")
+        domme_helper = [
+            "Click the button above and hand Rob your Throne link. He cannot track sends by spiritual connection."
+        ]
+        sub_helper = [
+            "Click the button above and give Rob your exact Throne sending name. Then he does the maths and fixes your rank."
+        ]
 
         domme_view = LeaderboardView(
+            cog=self,
             title=context.display_title,
             board_title="Domme Leaderboard",
             status_lines=status_lines,
             rows=domme_rows,
             empty_message="No sends recorded yet. Quiet board, for now.",
             accent_color=context.theme.accent_color,
+            register_kind="domme",
+            register_button_label="Link Throne",
+            register_section_text="Link your Throne and let Rob drag your sends onto the board.",
             helper_lines=domme_helper,
             footer=self._leaderboard_footer(context),
         )
         sub_view = LeaderboardView(
+            cog=self,
             title=context.display_title,
             board_title="Sub Leaderboard",
             status_lines=status_lines,
             rows=sub_rows,
             empty_message="Nobody is on the board yet. Suspiciously peaceful.",
             accent_color=context.theme.accent_color,
+            register_kind="sub",
+            register_button_label="Claim Sends",
+            register_section_text="If one of these names is yours, click the button and tell Rob exactly what you use on Throne.",
+            unclaimed_rows=unclaimed_rows,
+            unclaimed_total=format_money(unclaimed_total),
             helper_lines=sub_helper,
             footer=self._leaderboard_footer(context),
         )

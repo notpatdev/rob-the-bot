@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot.ui.cards import success_view
-from bot.ui.components import make_container, separator, subtle, text_block, thumbnail_section
+from bot.ui.components import action_section, make_container, media_gallery, separator, subtle, text_block
 from bot.ui.copy import DEPLOY_NOTIFICATION
 
 if TYPE_CHECKING:
@@ -31,6 +31,13 @@ def _render_rows(rows: list[tuple[str, float, int]]) -> str:
     lines: list[str] = []
     for index, (label, total, sends) in enumerate(rows, 1):
         lines.append(f"{_medal(index)} {label}\n**{format_money(total)}** · {sends} {_send_suffix(sends)}")
+    return "\n\n".join(lines)
+
+
+def _render_unclaimed_rows(rows: list[tuple[str, float, int]]) -> str:
+    lines: list[str] = []
+    for label, total, sends in rows:
+        lines.append(f"**{label}**\n{format_money(total)} · {sends} {_send_suffix(sends)}")
     return "\n\n".join(lines)
 
 
@@ -70,23 +77,58 @@ class LeaderboardView(discord.ui.LayoutView):
     def __init__(
         self,
         *,
+        cog: RobEventCog | None = None,
         title: str,
         board_title: str,
         status_lines: list[str],
         rows: list[tuple[str, float, int]],
         empty_message: str,
         accent_color: discord.Colour | int,
+        register_kind: str | None = None,
+        register_button_label: str | None = None,
+        register_section_text: str | None = None,
+        unclaimed_rows: list[tuple[str, float, int]] | None = None,
+        unclaimed_total: str | None = None,
         helper_lines: list[str] | None = None,
         footer: str | None = None,
     ) -> None:
         super().__init__(timeout=None)
+        self.cog = cog
+        self.register_kind = register_kind
+
+        register_button: discord.ui.Button | None = None
+        if cog is not None and register_kind and register_button_label:
+            register_button = discord.ui.Button(
+                label=register_button_label,
+                style=discord.ButtonStyle.primary,
+                custom_id=f"leaderboard:register:{register_kind}",
+            )
+            register_button.callback = self._open_register_modal
 
         sections: list[discord.ui.Item] = [
             separator(),
             text_block(f"### {board_title}\n\n" + "\n".join(status_lines)),
-            separator(),
-            text_block(_render_rows(rows) if rows else empty_message),
         ]
+        if register_button is not None and register_section_text and register_kind == "domme":
+            sections.extend([separator(), action_section(register_section_text, register_button)])
+        sections.extend([separator(), text_block(_render_rows(rows) if rows else empty_message)])
+        if register_button is not None and register_section_text and register_kind == "sub":
+            sections.extend(
+                [
+                    separator(),
+                    action_section(
+                        "### Unclaimed Sends\n\n"
+                        f"Tracked and waiting to be claimed: **{unclaimed_total or '$0.00'}**\n\n"
+                        f"{register_section_text}",
+                        register_button,
+                    ),
+                    text_block(
+                        _render_unclaimed_rows(unclaimed_rows or [])
+                        if unclaimed_rows
+                        else "No named loose sends right now. Rob is almost disappointed."
+                    ),
+                ]
+            )
         if helper_lines:
             sections.extend([separator()])
             sections.extend(subtle(line) for line in helper_lines if line)
@@ -100,6 +142,15 @@ class LeaderboardView(discord.ui.LayoutView):
                 accent_color=accent_color,
             )
         )
+
+    async def _open_register_modal(self, interaction: discord.Interaction) -> None:
+        if self.cog is None or self.register_kind is None:
+            await interaction.response.send_message("Rob dropped the clipboard. Try again.", ephemeral=True)
+            return
+        if self.register_kind == "domme":
+            await interaction.response.send_modal(DommeSignupModal(self.cog))
+            return
+        await interaction.response.send_modal(SubSignupModal(self.cog))
 
 
 class SendNotificationView(discord.ui.LayoutView):
@@ -118,26 +169,24 @@ class SendNotificationView(discord.ui.LayoutView):
         rank_label: str,
     ) -> None:
         super().__init__(timeout=None)
-
-        detail_lines = [
-            f"**Sub**\n{sub_label}",
-            f"**Domme**\n{domme_label}",
-            f"**Amount**\n{amount_label}",
-        ]
-        if item_name:
-            detail_lines.append(f"**Item**\n{item_name}")
-        detail_text = "\n".join(detail_lines)
-
         sections: list[discord.ui.Item] = [separator()]
-        if item_image_url:
-            sections.append(thumbnail_section(detail_text, item_image_url))
-        else:
-            sections.append(text_block(detail_text))
+        gallery = media_gallery(item_image_url) if item_image_url else None
+        if gallery is not None:
+            sections.append(gallery)
+        sections.extend(
+            [
+                text_block(f"**Sub**\n{sub_label}"),
+                text_block(f"**Domme**\n{domme_label}"),
+                text_block(f"**Amount**\n{amount_label}"),
+            ]
+        )
+        if item_name:
+            sections.append(text_block(f"**Item**\n{item_name}"))
 
-        footer_bits: list[str] = [f"Domme total sends: **{domme_send_count}**"]
+        fallout_lines = [f"Domme total sends: **{domme_send_count}**"]
         if sub_rank is not None:
-            footer_bits.insert(0, f"{rank_label}: **#{sub_rank}**")
-        sections.extend([separator(), subtle(" · ".join(footer_bits))])
+            fallout_lines.insert(0, f"{rank_label}: **#{sub_rank}**")
+        sections.extend([separator(), text_block("**Leaderboard fallout**\n" + "\n".join(fallout_lines))])
 
         self.add_item(
             make_container(

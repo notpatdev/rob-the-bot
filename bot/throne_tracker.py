@@ -358,7 +358,7 @@ class ThroneTrackerCog(commands.Cog):
             event_key=send.event_key,
         )
 
-        sub_label = sub_member.mention if sub_member is not None else "Unclaimed Send"
+        sub_label = sub_member.mention if sub_member is not None else (send.sub_name or "Unclaimed Send")
         domme_label = domme.mention if domme is not None else f"<@{domme_user_id}>"
         amount_label = format_money(send.amount_usd) if not send.is_private else "Unknown"
         title = theme.send_title if theme is not None else "New send just dropped"
