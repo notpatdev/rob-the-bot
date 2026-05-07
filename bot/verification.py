@@ -40,6 +40,7 @@ from bot.views import (
     FormLinkView,
     HelpView,
     ImportIdsModal,
+    ImportIdsTriggerView,
     ReactionRoleSetupModal,
     RoleSelectionView,
     StaffReviewView,
@@ -52,7 +53,6 @@ from bot.views import (
     SubSetupOwnerView,
     SubSetupReviewView,
     VerificationPanelView,
-    _ImportIdsTriggerView,
 )
 
 log = logging.getLogger(__name__)
@@ -1965,7 +1965,7 @@ class VerificationCog(commands.Cog):
             return
         # ctx.interaction is None for prefix commands; we must send a view with a button
         # to open the modal, since modals can only be opened from interactions.
-        view = _ImportIdsTriggerView()
+        view = ImportIdsTriggerView()
         await ctx.reply(
             "Click the button below to open the ID import form.",
             view=view,

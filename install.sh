@@ -102,7 +102,7 @@ note "After install, use !import ids inside Discord to set your channel/role IDs
 
 step "1/7" "Installing system packages"
 apt-get update -q
-apt-get install -y git python3 python3-venv python3-pip software-properties-common
+apt-get install -y -q git python3 python3-venv python3-pip software-properties-common
 
 if ! command -v python3.11 >/dev/null 2>&1; then
   if [[ -r /etc/os-release ]]; then
@@ -115,7 +115,7 @@ if ! command -v python3.11 >/dev/null 2>&1; then
   fi
 fi
 
-apt-get install -y python3.11 python3.11-venv
+apt-get install -y -q python3.11 python3.11-venv
 PYTHON_BIN="$(command -v python3.11)"
 
 if ! "${PYTHON_BIN}" - <<'PY'

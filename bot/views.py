@@ -1177,6 +1177,10 @@ _IMPORT_FIELD_NAMES = (
     "EVENT_BAN_ROLE_ID",
 )
 
+_OPTIONAL_IMPORT_FIELDS = {"EVENT_BAN_ROLE_ID"}
+
+_IMPORT_IDS_BUTTON_TIMEOUT_SECONDS = 300
+
 _CHANNELS_PY_TEMPLATE = """\
 from __future__ import annotations
 
@@ -1236,7 +1240,7 @@ class ImportIdsModal(discord.ui.Modal, title="Import Server IDs"):
                 continue
             parsed[key] = int(value)
 
-        missing = [f for f in _IMPORT_FIELD_NAMES if f not in parsed and f != "EVENT_BAN_ROLE_ID"]
+        missing = [f for f in _IMPORT_FIELD_NAMES if f not in parsed and f not in _OPTIONAL_IMPORT_FIELDS]
         if missing:
             await interaction.response.send_message(
                 f"❌ Missing required fields: {', '.join(f'`{f}`' for f in missing)}",
@@ -1244,8 +1248,9 @@ class ImportIdsModal(discord.ui.Modal, title="Import Server IDs"):
             )
             return
 
-        # Fill optional field with 0 if omitted
-        parsed.setdefault("EVENT_BAN_ROLE_ID", 0)
+        # Fill optional fields with 0 if omitted
+        for field in _OPTIONAL_IMPORT_FIELDS:
+            parsed.setdefault(field, 0)
 
         channels_path = pathlib.Path(__file__).parent / "channels.py"
         try:
@@ -1269,11 +1274,11 @@ class ImportIdsModal(discord.ui.Modal, title="Import Server IDs"):
         )
 
 
-class _ImportIdsTriggerView(discord.ui.View):
-    """Ephemeral button that opens ImportIdsModal (needed for prefix commands)."""
+class ImportIdsTriggerView(discord.ui.View):
+    """Button that opens ImportIdsModal (needed for prefix commands)."""
 
     def __init__(self) -> None:
-        super().__init__(timeout=300)
+        super().__init__(timeout=_IMPORT_IDS_BUTTON_TIMEOUT_SECONDS)
 
     @discord.ui.button(label="Open ID Form", style=discord.ButtonStyle.primary, emoji="📋")
     async def open_form(

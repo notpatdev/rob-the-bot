@@ -41,8 +41,8 @@ git -C "${APP_DIR}" reset --hard origin/main
 ok "Code updated to $(git -C "${APP_DIR}" rev-parse --short HEAD)"
 
 step "Upgrading Python dependencies..."
-"${APP_DIR}/.venv/bin/pip" install --upgrade pip -q
-"${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt" -q
+"${APP_DIR}/.venv/bin/pip" install --upgrade pip -qq
+"${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requirements.txt" -qq
 ok "Dependencies up to date"
 
 step "Restarting ${SERVICE_NAME} service..."
