@@ -439,17 +439,24 @@ class Database:
     ) -> list[UnclaimedSendRow]:
         where_sql, params = self._event_filter(event_key)
         query = f"""
+            WITH trimmed_sends AS (
+                SELECT
+                    TRIM(sub_name) AS sub_name,
+                    amount_usd,
+                    is_private
+                FROM event_sends
+                WHERE claimed_sub_user_id IS NULL
+                  AND sub_name IS NOT NULL
+                  {where_sql}
+            )
             SELECT
-                TRIM(sub_name) AS sub_name,
+                sub_name,
                 SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END) AS total_usd,
                 COUNT(*) AS send_count
-            FROM event_sends
-            WHERE claimed_sub_user_id IS NULL
-              AND sub_name IS NOT NULL
-              AND TRIM(sub_name) != ''
-            {where_sql}
-            GROUP BY TRIM(sub_name) COLLATE NOCASE
-            ORDER BY total_usd DESC, send_count DESC, TRIM(sub_name) COLLATE NOCASE ASC
+            FROM trimmed_sends
+            WHERE sub_name != ''
+            GROUP BY sub_name COLLATE NOCASE
+            ORDER BY total_usd DESC, send_count DESC, sub_name COLLATE NOCASE ASC
             LIMIT ?
         """
         async with self.connection.execute(query, (*params, limit)) as cursor:

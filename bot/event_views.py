@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,9 @@ from bot.ui.copy import DEPLOY_NOTIFICATION
 
 if TYPE_CHECKING:
     from bot.event_cog import RobEventCog
+
+
+log = logging.getLogger(__name__)
 
 
 def _medal(rank: int) -> str:
@@ -164,10 +168,11 @@ class LeaderboardView(discord.ui.LayoutView):
                     else "No named loose sends right now. Rob is almost disappointed."
                 ),
             ]
-        raise ValueError(f"Unsupported leaderboard register kind: {register_kind}")
+        raise ValueError("Unsupported leaderboard registration type.")
 
     async def _open_register_modal(self, interaction: discord.Interaction) -> None:
         if self.cog is None or self.register_kind is None:
+            log.error("Leaderboard register button invoked without a configured cog or registration type.")
             await interaction.response.send_message("Rob dropped the clipboard. Try again.", ephemeral=True)
             return
         if self.register_kind == "domme":
@@ -176,6 +181,7 @@ class LeaderboardView(discord.ui.LayoutView):
         if self.register_kind == "sub":
             await interaction.response.send_modal(SubSignupModal(self.cog))
             return
+        log.error("Leaderboard register button received unsupported type: %s", self.register_kind)
         await interaction.response.send_message("Rob lost track of that button. Try again in a sec.", ephemeral=True)
 
 
