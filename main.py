@@ -60,10 +60,17 @@ class RobBot(commands.Bot):
 
 
 def configure_logging() -> None:
+    log_format = "%(asctime)s %(levelname)s %(name)s: %(message)s"
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO"),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        format=log_format,
     )
+
+    log_path = os.getenv("LOG_PATH", "").strip()
+    if log_path:
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler.setFormatter(logging.Formatter(log_format))
+        logging.getLogger().addHandler(file_handler)
 
 
 def main() -> None:
