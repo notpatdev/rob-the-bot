@@ -522,8 +522,8 @@ class RobEventCog(commands.Cog):
 
         domme_view = LeaderboardView(
             cog=self,
-            title=context.display_title,
-            board_title="Domme Leaderboard",
+            title=f"{context.theme.emoji} Domme Leaderboard",
+            board_title=None,
             status_lines=status_lines,
             rows=domme_rows,
             empty_message="No sends recorded yet. Quiet board, for now.",
@@ -536,15 +536,15 @@ class RobEventCog(commands.Cog):
         )
         sub_view = LeaderboardView(
             cog=self,
-            title=context.display_title,
-            board_title="Sub Leaderboard",
+            title=f"{context.theme.emoji} Sub Leaderboard",
+            board_title=None,
             status_lines=status_lines,
             rows=sub_rows,
             empty_message="Nobody is on the board yet. Suspiciously peaceful.",
             accent_color=context.theme.accent_color,
             register_kind="sub",
             register_button_label="Claim Sends",
-            register_section_text="If one of these names is yours, click the button and tell Rob exactly what you use on Throne.",
+            register_section_text="If you have sends waiting to be claimed, click the button and enter the exact sending name you use on Throne when prompted.",
             unclaimed_rows=unclaimed_rows,
             unclaimed_total=format_money(unclaimed_total),
             helper_lines=sub_helper,

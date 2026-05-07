@@ -83,7 +83,7 @@ class LeaderboardView(discord.ui.LayoutView):
         *,
         cog: RobEventCog | None = None,
         title: str,
-        board_title: str,
+        board_title: str | None,
         status_lines: list[str],
         rows: list[tuple[str, float, int]],
         empty_message: str,
@@ -113,13 +113,16 @@ class LeaderboardView(discord.ui.LayoutView):
             register_button=register_button,
             register_kind=register_kind,
             register_section_text=register_section_text,
-            unclaimed_rows=unclaimed_rows,
             unclaimed_total=unclaimed_total,
         )
 
+        status_block = "\n".join(status_lines)
+        if board_title:
+            status_block = f"### {board_title}\n\n{status_block}"
+
         sections: list[discord.ui.Item] = [
             separator(),
-            text_block(f"### {board_title}\n\n" + "\n".join(status_lines)),
+            text_block(status_block),
             *pre_rows_sections,
             separator(),
             text_block(_render_rows(rows) if rows else empty_message),
@@ -134,10 +137,11 @@ class LeaderboardView(discord.ui.LayoutView):
                 title,
                 None,
                 sections=sections,
-                footer=footer,
                 accent_color=accent_color,
             )
         )
+        if footer:
+            self.add_item(subtle(footer))
 
     def _build_register_sections(
         self,
@@ -145,7 +149,6 @@ class LeaderboardView(discord.ui.LayoutView):
         register_button: discord.ui.Button | None,
         register_kind: str | None,
         register_section_text: str | None,
-        unclaimed_rows: list[tuple[str, float, int]] | None,
         unclaimed_total: str | None,
     ) -> tuple[list[discord.ui.Item], list[discord.ui.Item]]:
         if register_button is None or not register_section_text:
@@ -158,14 +161,9 @@ class LeaderboardView(discord.ui.LayoutView):
                 separator(),
                 action_section(
                     "### Unclaimed Sends\n\n"
-                    f"Tracked and waiting to be claimed: **{display_unclaimed_total}**\n\n"
+                    f"Tracked and waiting to be claimed: {display_unclaimed_total}\n\n"
                     f"{register_section_text}",
                     register_button,
-                ),
-                text_block(
-                    _render_unclaimed_rows(unclaimed_rows or [])
-                    if unclaimed_rows
-                    else "No named loose sends right now. Rob is almost disappointed."
                 ),
             ]
         raise ValueError(
