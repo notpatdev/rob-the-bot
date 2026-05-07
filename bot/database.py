@@ -22,6 +22,13 @@ class EventDommeTotalRow:
 
 
 @dataclass(frozen=True)
+class UnclaimedSendRow:
+    sub_name: str
+    total_usd: float
+    send_count: int
+
+
+@dataclass(frozen=True)
 class SendSummary:
     total_usd: float
     send_count: int
@@ -423,6 +430,45 @@ class Database:
         async with self.connection.execute(query, params) as cursor:
             row = await cursor.fetchone()
         return float(row["total_usd"]) if row is not None else 0.0
+
+    async def get_unclaimed_send_rows(
+        self,
+        *,
+        limit: int = 10,
+        event_key: str | None = None,
+    ) -> list[UnclaimedSendRow]:
+        where_sql, params = self._event_filter(event_key)
+        query = f"""
+            WITH trimmed_sends AS (
+                SELECT
+                    TRIM(sub_name) AS sub_name,
+                    amount_usd,
+                    is_private
+                FROM event_sends
+                WHERE claimed_sub_user_id IS NULL
+                  AND sub_name IS NOT NULL
+                  {where_sql}
+            )
+            SELECT
+                MIN(sub_name) AS sub_name,
+                SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END) AS total_usd,
+                COUNT(*) AS send_count
+            FROM trimmed_sends
+            WHERE sub_name != ''
+            GROUP BY sub_name COLLATE NOCASE
+            ORDER BY total_usd DESC, send_count DESC, sub_name COLLATE NOCASE ASC
+            LIMIT ?
+        """
+        async with self.connection.execute(query, (*params, limit)) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            UnclaimedSendRow(
+                sub_name=str(row["sub_name"]),
+                total_usd=float(row["total_usd"] or 0.0),
+                send_count=int(row["send_count"]),
+            )
+            for row in rows
+        ]
 
     async def get_event_domme_totals(self, *, event_key: str | None = None) -> list[EventDommeTotalRow]:
         where_sql, params = self._event_filter(event_key)
