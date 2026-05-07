@@ -37,7 +37,7 @@ def thumbnail_section(text: str, image_url: str) -> discord.ui.Section:
 
 
 def media_gallery(*urls: str) -> discord.ui.MediaGallery | None:
-    items = [discord.ui.MediaGalleryItem(url) for url in urls if url]
+    items = [discord.MediaGalleryItem(url) for url in urls if url]
     if not items:
         return None
     return discord.ui.MediaGallery(*items)
