@@ -20,12 +20,12 @@ import random
 import time
 import discord
 import aiohttp
-from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot.config import BotConfig
 from bot.database import Database, EventDommeRegistration
-from bot.event_embeds import format_money, send_found_embed
+from bot.event_embeds import format_money
+from bot.event_views import SendNotificationView
 from bot.throne_scraper import ScrapedSend, fetch_recent_sends, normalize_throne_url
 
 log = logging.getLogger(__name__)
@@ -266,95 +266,23 @@ class ThroneTrackerCog(commands.Cog):
         )
         domme_totals = await self.database.get_event_domme_total(user_id=domme_user_id)
         sub_label = sub_member.mention if sub_member is not None else "Unclaimed Send"
-        sub_nickname = (
-            getattr(sub_member, "display_name", None)
-            or getattr(sub_member, "name", None)
-            or "Unclaimed Send"
-        )
         domme_label = domme.mention if domme is not None else f"<@{domme_user_id}>"
-        domme_nickname = (
-            getattr(domme, "display_name", None)
-            or getattr(domme, "name", None)
-            or "Domme"
-        )
         amount_label = format_money(send.amount_usd) if not send.is_private else "Unknown"
         try:
             await channel.send(
-                embed=send_found_embed(
+                view=SendNotificationView(
                     sub_label=sub_label,
                     domme_label=domme_label,
                     amount_label=amount_label,
-                    sub_nickname=sub_nickname,
+                    item_name=send.item_name,
+                    item_image_url=send.item_image_url,
                     sub_rank=sub_rank,
-                    domme_nickname=domme_nickname,
                     domme_send_count=domme_totals.send_count,
-                    server_name=guild.name,
                 )
             )
         except discord.HTTPException:
             log.exception(
-                "Failed to post send embed for send id %s in channel %s.",
+                "Failed to post send notification for send id %s in channel %s.",
                 send_id,
                 self.config.send_track_channel_id,
             )
-
-    # ------------------------------------------------------------------
-    # Slash commands
-    # ------------------------------------------------------------------
-
-    @app_commands.command(
-        name="throne_refresh",
-        description="Mod-only: poll Throne pages immediately for new sends.",
-    )
-    @app_commands.describe(
-        member="Optional: only poll this Domme. If omitted, polls all opted-in Dommes."
-    )
-    async def throne_refresh(
-        self,
-        interaction: discord.Interaction,
-        member: discord.Member | None = None,
-    ) -> None:
-        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message(
-                "This command can only be used in a server.", ephemeral=True
-            )
-            return
-        if not _has_moderation_role(interaction.user, self.config):
-            await interaction.response.send_message(
-                "Only moderators can run this command.", ephemeral=True
-            )
-            return
-        event_cog = self.bot.get_cog("RobEventCog")
-        if event_cog is not None and hasattr(event_cog, "ensure_event_state_current"):
-            state = await event_cog.ensure_event_state_current()
-        else:
-            state = await self.database.get_event_state()
-        if not state.is_active:
-            await interaction.response.send_message(
-                "The event is not currently running.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            posted = await self._run_poll_cycle(
-                force_domme_user_id=member.id if member else None
-            )
-        except Exception:  # noqa: BLE001
-            log.exception("Manual /throne_refresh failed.")
-            await interaction.followup.send(
-                "Throne refresh failed — check the bot logs.", ephemeral=True
-            )
-            return
-        scope = f"for {member.mention}" if member else "for all opted-in Dommes"
-        await interaction.followup.send(
-            f"Throne refresh complete {scope}. New sends posted: **{posted}**.",
-            ephemeral=True,
-        )
-
-
-def _has_moderation_role(member: discord.Member, config: BotConfig) -> bool:
-    if member.guild_permissions.administrator:
-        return True
-    return any(role.id == config.moderation_role_id for role in member.roles)

@@ -53,7 +53,7 @@ class RobBot(commands.Bot):
             logging.info("Synced %s global command(s).", len(synced))
 
     async def on_ready(self) -> None:
-        logging.info("%s is online as %s.", self.config.bot_name, self.user)
+        logging.info("Rob is online as %s.", self.user)
 
     async def close(self) -> None:
         await self.database.close()
