@@ -385,7 +385,7 @@ def build_help_pages(
         "Restricted system controls and reference tools.",
         (
             ("/help", "Shows this help menu."),
-            ("!import ids", "Upload a JSON or text file with your server IDs — bot parses and confirms before saving."),
+            ("!import ids", "Upload a JSON or text file with your server IDs - bot parses and confirms before saving."),
             ("!resync [guild|clear|global]", "Developer/admin command to re-sync slash commands."),
         ),
     )

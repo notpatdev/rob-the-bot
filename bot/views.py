@@ -1184,6 +1184,7 @@ _OPTIONAL_IMPORT_FIELDS = {"EVENT_BAN_ROLE_ID"}
 
 _IMPORT_IDS_BUTTON_TIMEOUT_SECONDS = 300
 _IMPORT_IDS_UPLOAD_TIMEOUT_SECONDS = 120
+_IMPORT_IDS_CONFIRM_TIMEOUT_SECONDS = 120
 
 _CHANNELS_PY_TEMPLATE = """\
 from __future__ import annotations
@@ -1245,8 +1246,7 @@ _IMPORT_ALIASES: dict[str, str] = {
 def _resolve_key(raw_key: str) -> str | None:
     """Map a raw key from a file to a canonical _IMPORT_FIELD_NAMES entry."""
     normalised = raw_key.strip().lower().replace("-", "_").replace(" ", "_")
-    # Strip trailing _id if present and key contains more than just "_id"
-    without_id = normalised.removesuffix("_id") if normalised.endswith("_id") else normalised
+    without_id = normalised.removesuffix("_id")
     # Exact match against canonical names (uppercase)
     if normalised.upper() in _IMPORT_FIELD_NAMES:
         return normalised.upper()
@@ -1273,7 +1273,7 @@ def _parse_ids_file(content: str, filename: str) -> tuple[dict[str, int], list[s
                     raw_pairs.append((str(k), str(v)))
             else:
                 warnings.append("JSON is not a top-level object — falling back to text parsing.")
-                # fall through to text parsing below
+                raw_pairs = []  # ensure text parser runs
         except _json.JSONDecodeError:
             warnings.append("File looks like JSON but couldn't be parsed — trying text mode.")
 
@@ -1325,7 +1325,7 @@ class ImportIdsConfirmView(discord.ui.View):
     """Confirm / Cancel buttons shown after the file is parsed."""
 
     def __init__(self, parsed: dict[str, int], *, invoker_id: int) -> None:
-        super().__init__(timeout=120)
+        super().__init__(timeout=_IMPORT_IDS_CONFIRM_TIMEOUT_SECONDS)
         self._parsed = parsed
         self._invoker_id = invoker_id
 
