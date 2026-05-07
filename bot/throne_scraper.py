@@ -43,6 +43,7 @@ _FIRESTORE_DOCUMENTS_URL = (
 )
 _OVERLAY_SEND_TYPES = {"item-purchased-stream-alert"}
 _OVERLAY_QUERY_LIMIT = 25
+_VERCEL_CHECKPOINT_SEARCH_BYTES = 2048
 
 
 @dataclass(frozen=True)
@@ -336,6 +337,18 @@ async def _fetch_page_sends(
     except (aiohttp.ClientError, TimeoutError) as exc:
         log.warning("Failed to fetch Throne page %s: %s", normalized_url, exc)
         return PageFetchResult(sends=None, status="request_failed")
+
+    # Throne pages are sometimes served a Vercel bot-protection challenge
+    # instead of the actual Next.js content.  The challenge arrives as HTTP 200
+    # with a page title of "Vercel Security Checkpoint", so status-code checks
+    # alone won't catch it.  Treat it the same as rate-limiting so the
+    # per-domme page-enrichment cooldown kicks in.
+    if "vercel security checkpoint" in html[:_VERCEL_CHECKPOINT_SEARCH_BYTES].lower():
+        log.warning(
+            "Throne page %s returned a Vercel security checkpoint; treating as rate-limited.",
+            normalized_url,
+        )
+        return PageFetchResult(sends=None, status="rate_limited")
 
     try:
         return PageFetchResult(sends=parse_sends_from_html(html), status="ok")
