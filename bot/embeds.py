@@ -385,7 +385,7 @@ def build_help_pages(
         "Restricted system controls and reference tools.",
         (
             ("/help", "Shows this help menu."),
-            ("!import ids", "Opens a form to paste your server's channel and role IDs — updates channels.py."),
+            ("!import ids", "Upload a JSON or text file with your server IDs — bot parses and confirms before saving."),
             ("!resync [guild|clear|global]", "Developer/admin command to re-sync slash commands."),
         ),
     )
@@ -455,6 +455,54 @@ def reaction_role_created_embed(
     embed.add_field(name="Mappings", value=str(len(mappings)), inline=True)
     embed.add_field(name="Message", value=f"[Jump to message]({jump_url})", inline=False)
     _set_butler_footer(embed, "Reaction roles ready")
+    return embed
+
+
+def import_ids_embed() -> discord.Embed:
+    """Prompt embed for the !import ids command — button rendered below by the view."""
+    embed = _styled_embed(
+        title="📥 Import Server IDs",
+        description=(
+            "Click **Upload File** below to import your server's channel and role IDs.\n\n"
+            "Upload a **JSON** or **text** file containing your IDs — the bot will "
+            "parse it and ask you to confirm before saving anything."
+        ),
+        color=PURPLE,
+    )
+    embed.add_field(
+        name="Accepted formats",
+        value=(
+            "`JSON` — `{\"GUILD_ID\": 123, \"DOMME_ROLE_ID\": 456, ...}`\n"
+            "`Text` — `GUILD_ID=123` or `guild_id: 123` (one per line)"
+        ),
+        inline=False,
+    )
+    _set_butler_footer(embed, "Admin only • channels.py will be updated on confirm")
+    return embed
+
+
+def import_ids_confirm_embed(parsed: dict[str, int], warnings: list[str]) -> discord.Embed:
+    """Shows the IDs the bot parsed so the admin can confirm or cancel."""
+    field_labels = {
+        "GUILD_ID": "Guild",
+        "REGISTRATION_CHANNEL_ID": "Registration Channel",
+        "LEADERBOARD_CHANNEL_ID": "Leaderboard Channel",
+        "SEND_TRACK_CHANNEL_ID": "Send Track Channel",
+        "DOMME_ROLE_ID": "Domme Role",
+        "SUBMISSIVE_ROLE_ID": "Submissive Role",
+        "MODERATION_ROLE_ID": "Moderation Role",
+        "EVENT_BAN_ROLE_ID": "Event Ban Role",
+    }
+    lines = [f"**{field_labels.get(k, k)}:** `{v}`" for k, v in parsed.items()]
+    desc = "\n".join(lines)
+    if warnings:
+        desc += "\n\n⚠️ **Warnings:**\n" + "\n".join(f"• {w}" for w in warnings)
+    embed = _styled_embed(
+        title="✅ Confirm ID Import",
+        description=desc,
+        color=GREEN,
+    )
+    _set_butler_footer(embed, "React to confirm or cancel")
     return embed
 
 

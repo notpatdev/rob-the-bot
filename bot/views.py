@@ -1163,8 +1163,11 @@ class SubSetupOwnerView(SubSetupView):
 
 
 # ---------------------------------------------------------------------------
-# !import ids — admin modal to configure channel/role IDs in-Discord
+# !import ids — file-upload flow to configure channel/role IDs in-Discord
 # ---------------------------------------------------------------------------
+
+import asyncio
+import json as _json
 
 _IMPORT_FIELD_NAMES = (
     "GUILD_ID",
@@ -1180,6 +1183,7 @@ _IMPORT_FIELD_NAMES = (
 _OPTIONAL_IMPORT_FIELDS = {"EVENT_BAN_ROLE_ID"}
 
 _IMPORT_IDS_BUTTON_TIMEOUT_SECONDS = 300
+_IMPORT_IDS_UPLOAD_TIMEOUT_SECONDS = 120
 
 _CHANNELS_PY_TEMPLATE = """\
 from __future__ import annotations
@@ -1196,95 +1200,273 @@ MODERATION_ROLE_ID = {MODERATION_ROLE_ID}
 EVENT_BAN_ROLE_ID = {EVENT_BAN_ROLE_ID}
 """
 
+# Fuzzy aliases: lowercase fragment → canonical field name
+_IMPORT_ALIASES: dict[str, str] = {
+    "guild":                    "GUILD_ID",
+    "guild_id":                 "GUILD_ID",
+    "server":                   "GUILD_ID",
+    "server_id":                "GUILD_ID",
+    "registration":             "REGISTRATION_CHANNEL_ID",
+    "registration_channel":     "REGISTRATION_CHANNEL_ID",
+    "reg":                      "REGISTRATION_CHANNEL_ID",
+    "verify_channel":           "REGISTRATION_CHANNEL_ID",
+    "verification_channel":     "REGISTRATION_CHANNEL_ID",
+    "leaderboard":              "LEADERBOARD_CHANNEL_ID",
+    "leaderboard_channel":      "LEADERBOARD_CHANNEL_ID",
+    "lb":                       "LEADERBOARD_CHANNEL_ID",
+    "lb_channel":               "LEADERBOARD_CHANNEL_ID",
+    "send_track":               "SEND_TRACK_CHANNEL_ID",
+    "send_track_channel":       "SEND_TRACK_CHANNEL_ID",
+    "sends":                    "SEND_TRACK_CHANNEL_ID",
+    "sends_channel":            "SEND_TRACK_CHANNEL_ID",
+    "track":                    "SEND_TRACK_CHANNEL_ID",
+    "track_channel":            "SEND_TRACK_CHANNEL_ID",
+    "domme":                    "DOMME_ROLE_ID",
+    "domme_role":               "DOMME_ROLE_ID",
+    "dom":                      "DOMME_ROLE_ID",
+    "dom_role":                 "DOMME_ROLE_ID",
+    "submissive":               "SUBMISSIVE_ROLE_ID",
+    "submissive_role":          "SUBMISSIVE_ROLE_ID",
+    "sub":                      "SUBMISSIVE_ROLE_ID",
+    "sub_role":                 "SUBMISSIVE_ROLE_ID",
+    "moderation":               "MODERATION_ROLE_ID",
+    "moderation_role":          "MODERATION_ROLE_ID",
+    "mod":                      "MODERATION_ROLE_ID",
+    "mod_role":                 "MODERATION_ROLE_ID",
+    "staff":                    "MODERATION_ROLE_ID",
+    "staff_role":               "MODERATION_ROLE_ID",
+    "event_ban":                "EVENT_BAN_ROLE_ID",
+    "event_ban_role":           "EVENT_BAN_ROLE_ID",
+    "ban_role":                 "EVENT_BAN_ROLE_ID",
+    "eventban":                 "EVENT_BAN_ROLE_ID",
+}
 
-class ImportIdsModal(discord.ui.Modal, title="Import Server IDs"):
-    """Admin modal — paste KEY=VALUE pairs to update channels.py."""
 
-    ids_input: discord.ui.TextInput = discord.ui.TextInput(
-        label="Paste your IDs below (KEY=value, one per line)",
-        style=discord.TextStyle.paragraph,
-        placeholder=(
-            "GUILD_ID=123456789\n"
-            "REGISTRATION_CHANNEL_ID=123456789\n"
-            "LEADERBOARD_CHANNEL_ID=123456789\n"
-            "SEND_TRACK_CHANNEL_ID=123456789\n"
-            "DOMME_ROLE_ID=123456789\n"
-            "SUBMISSIVE_ROLE_ID=123456789\n"
-            "MODERATION_ROLE_ID=123456789\n"
-            "EVENT_BAN_ROLE_ID=0"
-        ),
-        required=True,
-        max_length=2000,
-    )
+def _resolve_key(raw_key: str) -> str | None:
+    """Map a raw key from a file to a canonical _IMPORT_FIELD_NAMES entry."""
+    normalised = raw_key.strip().lower().replace("-", "_").replace(" ", "_")
+    # Strip trailing _id if present and key contains more than just "_id"
+    without_id = normalised.removesuffix("_id") if normalised.endswith("_id") else normalised
+    # Exact match against canonical names (uppercase)
+    if normalised.upper() in _IMPORT_FIELD_NAMES:
+        return normalised.upper()
+    # Alias lookup
+    if normalised in _IMPORT_ALIASES:
+        return _IMPORT_ALIASES[normalised]
+    if without_id in _IMPORT_ALIASES:
+        return _IMPORT_ALIASES[without_id]
+    return None
 
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        raw = self.ids_input.value or ""
-        parsed: dict[str, int] = {}
-        errors: list[str] = []
 
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                errors.append(f"Skipped (no `=`): `{line}`")
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip().upper()
-            value = value.strip().strip('"').strip("'")
-            if key not in _IMPORT_FIELD_NAMES:
-                errors.append(f"Unknown key `{key}` — ignored.")
-                continue
-            if not re.fullmatch(r"\d+", value):
-                errors.append(f"`{key}` must be a numeric ID — got `{value}`.")
-                continue
-            parsed[key] = int(value)
+def _parse_ids_file(content: str, filename: str) -> tuple[dict[str, int], list[str]]:
+    """Parse a JSON or text file and return (parsed_ids, warnings)."""
+    parsed: dict[str, int] = {}
+    warnings: list[str] = []
+    raw_pairs: list[tuple[str, str]] = []
 
-        missing = [f for f in _IMPORT_FIELD_NAMES if f not in parsed and f not in _OPTIONAL_IMPORT_FIELDS]
-        if missing:
-            await interaction.response.send_message(
-                f"❌ Missing required fields: {', '.join(f'`{f}`' for f in missing)}",
-                ephemeral=True,
-            )
-            return
-
-        # Fill optional fields with 0 if omitted
-        for field in _OPTIONAL_IMPORT_FIELDS:
-            parsed.setdefault(field, 0)
-
-        channels_path = pathlib.Path(__file__).parent / "channels.py"
+    # --- try JSON first ---
+    if filename.lower().endswith(".json") or content.lstrip().startswith("{"):
         try:
-            channels_path.write_text(_CHANNELS_PY_TEMPLATE.format(**parsed), encoding="utf-8")
-        except OSError as exc:
-            await interaction.response.send_message(
-                f"❌ Could not write `channels.py`: {exc}",
-                ephemeral=True,
-            )
-            return
+            data = _json.loads(content)
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    raw_pairs.append((str(k), str(v)))
+            else:
+                warnings.append("JSON is not a top-level object — falling back to text parsing.")
+                # fall through to text parsing below
+        except _json.JSONDecodeError:
+            warnings.append("File looks like JSON but couldn't be parsed — trying text mode.")
 
-        lines = [f"`{k}` → `{v}`" for k, v in parsed.items()]
-        warning = ""
-        if errors:
-            warning = "\n\n⚠️ Warnings:\n" + "\n".join(errors)
+    # --- text parsing (KEY=VALUE or KEY: VALUE) ---
+    if not raw_pairs:
+        for line in content.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("//"):
+                continue
+            # Try = then :
+            if "=" in line:
+                key, _, value = line.partition("=")
+            elif ":" in line:
+                key, _, value = line.partition(":")
+            else:
+                continue
+            raw_pairs.append((key.strip(), value.strip().strip('"').strip("'")))
+
+    # --- resolve and validate each pair ---
+    for raw_key, raw_value in raw_pairs:
+        canonical = _resolve_key(raw_key)
+        if canonical is None:
+            warnings.append(f"Unknown key `{raw_key}` — skipped.")
+            continue
+        # Strip quotes / whitespace
+        value_clean = raw_value.strip().strip('"').strip("'")
+        if not re.fullmatch(r"\d+", value_clean):
+            warnings.append(f"`{canonical}` — expected a numeric ID, got `{value_clean}`.")
+            continue
+        if canonical in parsed:
+            warnings.append(f"`{canonical}` appeared more than once — kept first value.")
+            continue
+        parsed[canonical] = int(value_clean)
+
+    return parsed, warnings
+
+
+def _write_channels_py(parsed: dict[str, int]) -> str | None:
+    """Write channels.py from parsed IDs. Returns error message or None on success."""
+    channels_path = pathlib.Path(__file__).parent / "channels.py"
+    try:
+        channels_path.write_text(_CHANNELS_PY_TEMPLATE.format(**parsed), encoding="utf-8")
+    except OSError as exc:
+        return str(exc)
+    return None
+
+
+class ImportIdsConfirmView(discord.ui.View):
+    """Confirm / Cancel buttons shown after the file is parsed."""
+
+    def __init__(self, parsed: dict[str, int], *, invoker_id: int) -> None:
+        super().__init__(timeout=120)
+        self._parsed = parsed
+        self._invoker_id = invoker_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self._invoker_id:
+            return True
         await interaction.response.send_message(
-            f"✅ **`channels.py` updated!** Restart the bot to apply.\n\n"
-            + "\n".join(lines)
-            + warning,
+            "Only the person who ran `!import ids` can confirm this.",
             ephemeral=True,
         )
+        return False
 
-
-class ImportIdsTriggerView(discord.ui.View):
-    """Button that opens ImportIdsModal (needed for prefix commands)."""
-
-    def __init__(self) -> None:
-        super().__init__(timeout=_IMPORT_IDS_BUTTON_TIMEOUT_SECONDS)
-
-    @discord.ui.button(label="Open ID Form", style=discord.ButtonStyle.primary, emoji="📋")
-    async def open_form(
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(
         self,
         interaction: discord.Interaction,
         _: discord.ui.Button,
     ) -> None:
-        await interaction.response.send_modal(ImportIdsModal())
+        _disable_all(self)
+        err = _write_channels_py(self._parsed)
+        if err:
+            await interaction.response.edit_message(
+                content=f"❌ Could not write `channels.py`: {err}",
+                embed=None,
+                view=self,
+            )
+        else:
+            await interaction.response.edit_message(
+                content="✅ **`channels.py` saved!** Restart the bot to apply.",
+                embed=None,
+                view=self,
+            )
         self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, emoji="✗")
+    async def cancel(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        _disable_all(self)
+        await interaction.response.edit_message(
+            content="Import cancelled — nothing was saved.",
+            embed=None,
+            view=self,
+        )
+        self.stop()
+
+
+class ImportIdsUploadView(discord.ui.View):
+    """Embed button — starts the file-upload flow when clicked."""
+
+    def __init__(self, *, invoker_id: int) -> None:
+        super().__init__(timeout=_IMPORT_IDS_BUTTON_TIMEOUT_SECONDS)
+        self._invoker_id = invoker_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self._invoker_id:
+            return True
+        await interaction.response.send_message(
+            "Only the person who ran `!import ids` can use this.",
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(label="Upload File", style=discord.ButtonStyle.primary, emoji="📂")
+    async def upload_file(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        await interaction.response.send_message(
+            f"📎 Upload your `.json` or `.txt` file as an attachment in this channel.\n"
+            f"You have {_IMPORT_IDS_UPLOAD_TIMEOUT_SECONDS} seconds.",
+            ephemeral=True,
+        )
+        self.stop()
+        _disable_all(self)
+
+        def check(m: discord.Message) -> bool:
+            return (
+                m.author.id == interaction.user.id
+                and m.channel.id == (interaction.channel_id or 0)
+                and bool(m.attachments)
+            )
+
+        try:
+            msg: discord.Message = await interaction.client.wait_for(
+                "message",
+                check=check,
+                timeout=_IMPORT_IDS_UPLOAD_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            await interaction.followup.send(
+                "⏱️ Timed out waiting for a file upload.",
+                ephemeral=True,
+            )
+            return
+
+        attachment = msg.attachments[0]
+        # Silently clean up the upload message so the channel stays tidy
+        try:
+            await msg.delete()
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+        try:
+            raw_bytes = await attachment.read()
+            content = raw_bytes.decode("utf-8", errors="replace")
+        except discord.HTTPException as exc:
+            await interaction.followup.send(
+                f"❌ Could not read the file: {exc}",
+                ephemeral=True,
+            )
+            return
+
+        parsed, warnings = _parse_ids_file(content, attachment.filename)
+
+        # Check required fields are present
+        missing = [
+            f for f in _IMPORT_FIELD_NAMES
+            if f not in parsed and f not in _OPTIONAL_IMPORT_FIELDS
+        ]
+        if missing:
+            await interaction.followup.send(
+                f"❌ Could not find the following required IDs in your file:\n"
+                + "\n".join(f"• `{f}`" for f in missing)
+                + "\n\nCheck the field names and try again.",
+                ephemeral=True,
+            )
+            return
+
+        # Fill optional fields with 0 if absent
+        for field in _OPTIONAL_IMPORT_FIELDS:
+            parsed.setdefault(field, 0)
+
+        from bot.embeds import import_ids_confirm_embed  # local to avoid circular import
+
+        confirm_view = ImportIdsConfirmView(parsed, invoker_id=interaction.user.id)
+        await interaction.followup.send(
+            embed=import_ids_confirm_embed(parsed, warnings),
+            view=confirm_view,
+            ephemeral=True,
+        )

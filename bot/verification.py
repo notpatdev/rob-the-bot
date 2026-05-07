@@ -39,8 +39,7 @@ from bot.views import (
     DommeSetupThroneView,
     FormLinkView,
     HelpView,
-    ImportIdsModal,
-    ImportIdsTriggerView,
+    ImportIdsUploadView,
     ReactionRoleSetupModal,
     RoleSelectionView,
     StaffReviewView,
@@ -1950,7 +1949,7 @@ class VerificationCog(commands.Cog):
         ctx: commands.Context[commands.Bot],
         subcommand: str | None = None,
     ) -> None:
-        """Admin command: `!import ids` opens a form to update channel/role IDs."""
+        """Admin command: `!import ids` — sends an embed with a file-upload button."""
         if ctx.guild is None or not isinstance(ctx.author, discord.Member):
             await ctx.reply("This command can only be used in a server.", mention_author=False)
             return
@@ -1959,15 +1958,13 @@ class VerificationCog(commands.Cog):
             return
         if (subcommand or "").strip().lower() != "ids":
             await ctx.reply(
-                "Usage: `!import ids` — opens a form to paste your server IDs.",
+                "Usage: `!import ids` — upload a JSON or text file with your server IDs.",
                 mention_author=False,
             )
             return
-        # ctx.interaction is None for prefix commands; we must send a view with a button
-        # to open the modal, since modals can only be opened from interactions.
-        view = ImportIdsTriggerView()
+        view = ImportIdsUploadView(invoker_id=ctx.author.id)
         await ctx.reply(
-            "Click the button below to open the ID import form.",
+            embed=embeds.import_ids_embed(),
             view=view,
             mention_author=False,
         )
