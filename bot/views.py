@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json as _json
 import pathlib
 import re
 from typing import TYPE_CHECKING
@@ -1207,9 +1209,6 @@ class SubSetupOwnerView(SubSetupView):
 # !import ids — file-upload flow to configure channel/role IDs in-Discord
 # ---------------------------------------------------------------------------
 
-import asyncio
-import json as _json
-
 _IMPORT_FIELD_NAMES = (
     "GUILD_ID",
     "REGISTRATION_CHANNEL_ID",
@@ -1226,6 +1225,8 @@ _OPTIONAL_IMPORT_FIELDS = {"EVENT_BAN_ROLE_ID"}
 _IMPORT_IDS_BUTTON_TIMEOUT_SECONDS = 300
 _IMPORT_IDS_UPLOAD_TIMEOUT_SECONDS = 120
 _IMPORT_IDS_CONFIRM_TIMEOUT_SECONDS = 120
+
+_DIGITS_ONLY_RE = re.compile(r"\d+")
 
 _CHANNELS_PY_TEMPLATE = """\
 from __future__ import annotations
@@ -1341,7 +1342,7 @@ def _parse_ids_file(content: str, filename: str) -> tuple[dict[str, int], list[s
             continue
         # Strip quotes / whitespace
         value_clean = raw_value.strip().strip('"').strip("'")
-        if not re.fullmatch(r"\d+", value_clean):
+        if not _DIGITS_ONLY_RE.fullmatch(value_clean):
             warnings.append(f"`{canonical}` — expected a numeric ID, got `{value_clean}`.")
             continue
         if canonical in parsed:
