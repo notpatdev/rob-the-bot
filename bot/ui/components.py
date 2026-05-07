@@ -43,7 +43,7 @@ def media_gallery(*urls: str) -> discord.ui.MediaGallery | None:
     try:
         items = [discord.MediaGalleryItem(url) for url in urls if url]
     except (TypeError, ValueError):
-        log.exception("Ignoring invalid media gallery URL.")
+        log.exception("Ignoring invalid media gallery URL(s): %s", [url for url in urls if url])
         return None
     if not items:
         return None

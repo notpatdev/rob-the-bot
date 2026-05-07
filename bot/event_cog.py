@@ -544,7 +544,7 @@ class RobEventCog(commands.Cog):
             accent_color=context.theme.accent_color,
             register_kind="sub",
             register_button_label="Claim Sends",
-            register_section_text="If you have sends waiting to be claimed, click the button and tell Rob exactly what you use on Throne.",
+            register_section_text="If you have sends waiting to be claimed, click the button and enter the exact sending name you use on Throne.",
             unclaimed_rows=unclaimed_rows,
             unclaimed_total=format_money(unclaimed_total),
             helper_lines=sub_helper,
