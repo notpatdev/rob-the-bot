@@ -40,10 +40,11 @@ def thumbnail_section(text: str, image_url: str) -> discord.ui.Section:
 
 
 def media_gallery(*urls: str) -> discord.ui.MediaGallery | None:
+    filtered_urls = [url for url in urls if url]
     try:
-        items = [discord.MediaGalleryItem(url) for url in urls if url]
+        items = [discord.MediaGalleryItem(url) for url in filtered_urls]
     except (TypeError, ValueError):
-        log.exception("Ignoring invalid media gallery URL(s): %s", [url for url in urls if url])
+        log.exception("Ignoring invalid media gallery URL(s): %s", filtered_urls)
         return None
     if not items:
         return None
