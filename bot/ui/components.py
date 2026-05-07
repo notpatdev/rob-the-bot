@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 
 import discord
 
 from bot.ui.copy import footer as subtle_footer
 from bot.ui.theme import COLOR_INFO
+
+log = logging.getLogger(__name__)
 
 
 def _coerce_color(
@@ -37,7 +40,11 @@ def thumbnail_section(text: str, image_url: str) -> discord.ui.Section:
 
 
 def media_gallery(*urls: str) -> discord.ui.MediaGallery | None:
-    items = [discord.MediaGalleryItem(url) for url in urls if url]
+    try:
+        items = [discord.MediaGalleryItem(url) for url in urls if url]
+    except (TypeError, ValueError):
+        log.exception("Ignoring invalid media gallery URL.")
+        return None
     if not items:
         return None
     return discord.ui.MediaGallery(*items)
