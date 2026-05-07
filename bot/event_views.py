@@ -14,18 +14,17 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import discord
+from bot.ui.cards import event_status_card, info_view, send_notification_card, success_view
+from bot.ui.copy import DEPLOY_NOTIFICATION, EMPTY_LEADERBOARD, NOT_YOURS
+from bot.ui.theme import ROB_BLUE as BLUE
+from bot.ui.theme import ROB_GOLD as GOLD
+from bot.ui.theme import ROB_PURPLE as PURPLE
+from bot.ui.theme import ROB_RED as RED
 
 if TYPE_CHECKING:
     from bot.event_cog import RobEventCog
 
 log = logging.getLogger(__name__)
-
-# ─── Colour palette ───────────────────────────────────────────────────────────
-PURPLE = discord.Colour.from_rgb(139, 92, 246)   # leaderboard / accent
-GREEN  = discord.Colour.from_rgb(34, 197, 94)    # success / sends
-RED    = discord.Colour.from_rgb(220, 38, 38)    # danger / end event
-BLUE   = discord.Colour.from_rgb(59, 130, 246)   # info / domme totals
-GOLD   = discord.Colour.from_rgb(234, 179, 8)    # update notification
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -39,13 +38,6 @@ def format_money(amount: float | None) -> str:
     return f"${amount:,.2f}"
 
 
-def _simple_view(text: str, *, colour: discord.Colour = GREEN, timeout: float = 60) -> discord.ui.LayoutView:
-    """Tiny helper: a LayoutView containing a single-text Container."""
-    view = discord.ui.LayoutView(timeout=timeout)
-    view.add_item(discord.ui.Container(discord.ui.TextDisplay(text), accent_color=colour))
-    return view
-
-
 # ─── Modals ───────────────────────────────────────────────────────────────────
 
 class DommeSignupModal(discord.ui.Modal, title="Domme Sign-Up"):
@@ -53,7 +45,7 @@ class DommeSignupModal(discord.ui.Modal, title="Domme Sign-Up"):
 
     throne_input: discord.ui.TextInput = discord.ui.TextInput(
         label="Throne username or link",
-        placeholder="e.g.  mistressxxx   or   https://throne.com/mistressxxx",
+        placeholder="mistressxxx or https://throne.com/mistressxxx",
         min_length=2,
         max_length=200,
     )
@@ -71,7 +63,7 @@ class SubSignupModal(discord.ui.Modal, title="Sub Sign-Up"):
 
     name_input: discord.ui.TextInput = discord.ui.TextInput(
         label="Your Throne sending name",
-        placeholder="The name you use when sending on Throne",
+        placeholder="The name you use on Throne",
         min_length=1,
         max_length=100,
     )
@@ -89,13 +81,13 @@ class EventStartModal(discord.ui.Modal, title="Set Event End Time"):
 
     date_input: discord.ui.TextInput = discord.ui.TextInput(
         label="End date (YYYY-MM-DD)",
-        placeholder="e.g.  2025-05-12",
+        placeholder="2025-05-12",
         min_length=10,
         max_length=10,
     )
     time_input: discord.ui.TextInput = discord.ui.TextInput(
         label="End time (HH:MM — 24 h, AEST/Sydney)",
-        placeholder="e.g.  23:59",
+        placeholder="23:59",
         min_length=5,
         max_length=5,
     )
@@ -112,7 +104,7 @@ class EventStartModal(discord.ui.Modal, title="Set Event End Time"):
         )
 
 
-class ImportChannelsModal(discord.ui.Modal, title="Configure — Channels & Guild"):
+class ImportChannelsModal(discord.ui.Modal, title="Set Up — Channels & Guild"):
     """Step 1 of 2: channel IDs and guild ID."""
 
     guild_id_field: discord.ui.TextInput = discord.ui.TextInput(
@@ -161,7 +153,7 @@ class ImportChannelsModal(discord.ui.Modal, title="Configure — Channels & Guil
             mod = int(self.mod_role.value.strip())
         except ValueError:
             await interaction.response.send_message(
-                "All IDs must be numeric. Please try again.", ephemeral=True
+                "Discord IDs are long angry numbers. Try again.", ephemeral=True
             )
             return
         await interaction.response.send_modal(
@@ -176,7 +168,7 @@ class ImportChannelsModal(discord.ui.Modal, title="Configure — Channels & Guil
         )
 
 
-class ImportRolesModal(discord.ui.Modal, title="Configure — Roles"):
+class ImportRolesModal(discord.ui.Modal, title="Set Up — Roles"):
     """Step 2 of 2: role IDs."""
 
     domme_role: discord.ui.TextInput = discord.ui.TextInput(
@@ -222,7 +214,7 @@ class ImportRolesModal(discord.ui.Modal, title="Configure — Roles"):
             sub = int(self.sub_role.value.strip())
         except ValueError:
             await interaction.response.send_message(
-                "Role IDs must be numeric. Please try again.", ephemeral=True
+                "Role IDs are long angry numbers. Try again.", ephemeral=True
             )
             return
         ban_str = self.ban_role.value.strip()
@@ -260,13 +252,13 @@ class EventStartPromptView(discord.ui.LayoutView):
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
-                    f"## 🚀 Start Event — {cog.config.event_name}\n\n"
-                    "Set the date and time the event will end. "
-                    "Times are entered in **AEST (UTC+10 / Sydney)**."
+                    f"## 🚀 Fire Up the Chaos Machine\n\n"
+                    f"Set when **{cog.config.event_name}** ends.\n"
+                    "Times are Sydney time, so nobody launches this into yesterday."
                 ),
                 discord.ui.Separator(),
                 discord.ui.Section(
-                    "Open the date & time picker to get started.",
+                    "Pick the end time.",
                     accessory=btn,
                 ),
                 accent_color=PURPLE,
@@ -276,7 +268,7 @@ class EventStartPromptView(discord.ui.LayoutView):
     async def _set_end_time(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message(
-                "Only the person who ran this command can use this button.",
+                NOT_YOURS,
                 ephemeral=True,
             )
             return
@@ -308,12 +300,12 @@ class EventEndConfirmView(discord.ui.LayoutView):
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     f"## ⚠️ End Event Early?\n\n"
-                    f"This will end **{cog.config.event_name}** right now and freeze "
-                    "the leaderboards. This cannot be undone."
+                    f"This ends **{cog.config.event_name}** right now.\n"
+                    "The leaderboards freeze. No undo."
                 ),
                 discord.ui.Separator(),
                 discord.ui.Section("Confirm ending the event immediately.", accessory=end_btn),
-                discord.ui.Section("Changed your mind?", accessory=cancel_btn),
+                discord.ui.Section("Changed your mind? Back away slowly.", accessory=cancel_btn),
                 accent_color=RED,
             )
         )
@@ -321,7 +313,7 @@ class EventEndConfirmView(discord.ui.LayoutView):
     async def _end_event(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message(
-                "Only the person who ran this command can use this button.",
+                NOT_YOURS,
                 ephemeral=True,
             )
             return
@@ -330,18 +322,18 @@ class EventEndConfirmView(discord.ui.LayoutView):
     async def _cancel(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message(
-                "Only the person who ran this command can use this button.",
+                NOT_YOURS,
                 ephemeral=True,
             )
             return
         self.stop()
         await interaction.response.edit_message(
-            view=_simple_view("Event end cancelled.", colour=BLUE),
+            view=info_view("Cancelled.", "Crisis avoided."),
         )
 
 
 class ImportPromptView(discord.ui.LayoutView):
-    """Sent in reply to !import id — button opens ImportChannelsModal."""
+    """Sent in reply to !import — button opens ImportChannelsModal."""
 
     def __init__(self, cog: RobEventCog, *, owner_id: int, guild_id: int) -> None:
         super().__init__(timeout=300)
@@ -360,11 +352,10 @@ class ImportPromptView(discord.ui.LayoutView):
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "## ⚙️ Configure Channel & Role IDs\n\n"
-                    "Two forms will open in sequence. Fill in your server's channel and "
-                    "role IDs — the configuration is saved to the database immediately."
+                    "Two forms. A few IDs. Rob does the filing."
                 ),
                 discord.ui.Separator(),
-                discord.ui.Section("Open the configuration forms.", accessory=btn),
+                discord.ui.Section("Open the forms.", accessory=btn),
                 accent_color=BLUE,
             )
         )
@@ -372,7 +363,7 @@ class ImportPromptView(discord.ui.LayoutView):
     async def _configure(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message(
-                "Only the person who ran this command can use this button.",
+                NOT_YOURS,
                 ephemeral=True,
             )
             return
@@ -427,11 +418,11 @@ class SubLeaderboardView(discord.ui.LayoutView):
             rankings_text = "\n".join(lines)
             if len(rows) >= 20:
                 rankings_text += (
-                    "\n\n-# Showing top 20. Use `/register action:sub` to get on the board."
+                    "\n\n-# Top 20 only. Register if you want in."
                 )
         else:
             rankings_text = (
-                "*No ranked subs yet.*\n"
+                f"{EMPTY_LEADERBOARD}\n"
                 "-# Subs: use `/register action:sub` to link your Throne name."
             )
 
@@ -445,8 +436,8 @@ class SubLeaderboardView(discord.ui.LayoutView):
             components.append(discord.ui.Separator())
             components.append(
                 discord.ui.TextDisplay(
-                    f"-# 💬 {format_money(unclaimed_total)} in sends is unclaimed — "
-                    "those subs haven't registered yet."
+                    f"-# 💬 {format_money(unclaimed_total)} is unclaimed. "
+                    "Those subs have not registered yet."
                 )
             )
 
@@ -472,7 +463,7 @@ class DommeTotalsView(discord.ui.LayoutView):
                 )
             totals_text = "\n".join(lines)
         else:
-            totals_text = "*No sends tracked yet.*"
+            totals_text = "No sends. No drama. Weird."
 
         self.add_item(
             discord.ui.Container(
@@ -501,42 +492,17 @@ class SendNotificationView(discord.ui.LayoutView):
         domme_send_count: int,
     ) -> None:
         super().__init__(timeout=None)
-
-        details_lines = [
-            f"**Sub:** {sub_label}",
-            f"**Domme:** {domme_label}",
-            f"**Amount:** {amount_label}",
-        ]
-        if item_name:
-            details_lines.append(f"**Item:** {item_name}")
-
-        footer_parts: list[str] = []
-        if sub_rank is not None:
-            footer_parts.append(f"Sub rank: **#{sub_rank}**")
-        footer_parts.append(f"Domme total sends: **{domme_send_count}**")
-        footer_text = " · ".join(footer_parts)
-
-        components: list[discord.ui.Item] = [
-            discord.ui.TextDisplay("## 💵 New Send!"),
-            discord.ui.Separator(),
-        ]
-
-        if item_image_url:
-            # Section puts the thumbnail accessory on the right inside the card
-            components.append(
-                discord.ui.Section(
-                    "\n".join(details_lines),
-                    accessory=discord.ui.Thumbnail(item_image_url),
-                )
+        self.add_item(
+            send_notification_card(
+                sub_label=sub_label,
+                domme_label=domme_label,
+                amount_label=amount_label,
+                item_name=item_name,
+                item_image_url=item_image_url,
+                sub_rank=sub_rank,
+                domme_send_count=domme_send_count,
             )
-        else:
-            components.append(discord.ui.TextDisplay("\n".join(details_lines)))
-
-        if footer_text:
-            components.append(discord.ui.Separator())
-            components.append(discord.ui.TextDisplay(f"-# {footer_text}"))
-
-        self.add_item(discord.ui.Container(*components, accent_color=GREEN))
+        )
 
 
 # ─── Event status view (ephemeral reply to !event status) ─────────────────────
@@ -575,18 +541,14 @@ class EventStatusView(discord.ui.LayoutView):
         else:
             status_line = "⚪ **Not started**"
 
-        body = (
-            f"## 📊 Event Status — {event_name}\n\n"
-            f"{status_line}\n\n"
-            f"**Dommes registered:** {domme_count}\n"
-            f"**Subs registered:** {sub_count}\n"
-            f"**Total sends:** {send_count} — {format_money(send_total_usd)}"
-        )
-
         self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(body),
-                accent_color=BLUE,
+            event_status_card(
+                event_name=event_name,
+                status_line=status_line,
+                domme_count=domme_count,
+                sub_count=sub_count,
+                send_count=send_count,
+                send_total_usd=format_money(send_total_usd),
             )
         )
 
@@ -611,13 +573,12 @@ class UpdateNotificationView(discord.ui.LayoutView):
         self.add_item(
             discord.ui.Container(
                 discord.ui.TextDisplay(
-                    "## ✅ Bot Restarted\n\n"
+                    f"## ✅ {DEPLOY_NOTIFICATION}\n\n"
                     f"Rob came back online <t:{now_ts}:R>.\n"
-                    "If this was triggered by a GitHub Actions deploy, "
-                    "the latest code is now running."
+                    "Latest code should be live now."
                 ),
                 discord.ui.Separator(),
-                discord.ui.Section("Tap to dismiss this notification.", accessory=ack_btn),
+                discord.ui.Section("Dismiss this tiny announcement.", accessory=ack_btn),
                 accent_color=GOLD,
             )
         )
@@ -625,9 +586,9 @@ class UpdateNotificationView(discord.ui.LayoutView):
     async def _acknowledge(self, interaction: discord.Interaction) -> None:
         now_ts = int(datetime.now(timezone.utc).timestamp())
         await interaction.response.edit_message(
-            view=_simple_view(
-                f"✅ Acknowledged <t:{now_ts}:R>.",
-                colour=GREEN,
+            view=success_view(
+                "Sorted.",
+                f"Acknowledged <t:{now_ts}:R>.",
                 timeout=1,
             )
         )

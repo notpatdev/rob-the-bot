@@ -2,7 +2,7 @@
 
 Commands
 --------
-DEV   !import id             — opens configuration modal (2-step)
+DEV   !import                — opens configuration modal (2-step)
 MOD   !event start           — opens end-time picker
 MOD   !event end             — confirms early end
 MOD   !event status          — shows event state
@@ -34,10 +34,9 @@ from bot.event_views import (
     SubLeaderboardView,
     SubSignupModal,
     UpdateNotificationView,
-    _simple_view,
-    BLUE,
-    GREEN,
 )
+from bot.ui.cards import info_view, success_view
+from bot.ui.copy import STATUS_LINES
 from bot.throne_scraper import normalize_throne_registration_input, resolve_creator_id
 from bot.utils import has_admin_command_permissions
 
@@ -132,17 +131,11 @@ class RobEventCog(commands.Cog):
 
     @tasks.loop(minutes=12)
     async def status_loop(self) -> None:
-        statuses = [
-            self.config.event_name,
-            "send totals",
-            "Throne again",
-            "everyone's leaderboard business",
-        ]
         try:
             await self.bot.change_presence(
                 activity=discord.Activity(
                     type=discord.ActivityType.watching,
-                    name=random.choice(statuses),
+                    name=random.choice(STATUS_LINES),
                 )
             )
         except discord.HTTPException:
@@ -182,26 +175,26 @@ class RobEventCog(commands.Cog):
         signup_type: str,
     ) -> str | None:
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            return "This sign-up only works in the server."
+            return "Server only."
         member = interaction.user
         state = await self.ensure_event_state_current()
         if not state.is_active and state.ended_at is not None:
-            return "The event has ended."
+            return "Event's over."
         if self._member_has_role(member, self.config.event_ban_role_id):
-            return "You can't register for this event."
+            return "Nope. You're blocked from this event."
         if signup_type == "domme" and self._member_has_role(member, self.config.submissive_role_id):
-            return "You can't sign up as a Domme while you have the Sub role."
+            return "You already have the Sub role."
         if signup_type == "sub" and self._member_has_role(member, self.config.domme_role_id):
-            return "You can't sign up as a Sub while you have the Domme role."
+            return "You already have the Domme role."
         return None
 
-    # ──────────────────────────────── !import id ──────────────────────────────
+    # ──────────────────────────────── !import ──────────────────────────────
 
     @commands.command(name="import")
     async def import_ids(self, ctx: commands.Context[commands.Bot]) -> None:
         """DEV: open a form to set channel and role IDs."""
         if ctx.guild is None or not isinstance(ctx.author, discord.Member):
-            await ctx.reply("This command only works in a server channel.", mention_author=False)
+            await ctx.reply("Server only.", mention_author=False)
             return
 
         # Gate on bot application owner only
@@ -214,7 +207,7 @@ class RobEventCog(commands.Cog):
         if owner_id is None or ctx.author.id != owner_id:
             # Allow server admins as a fallback if owner is not present
             if not ctx.author.guild_permissions.administrator:
-                await ctx.reply("Only the bot owner or a server administrator can use this command.", mention_author=False)
+                await ctx.reply("Bot owner or admin only.", mention_author=False)
                 return
 
         guild_id = ctx.guild.id
@@ -257,11 +250,12 @@ class RobEventCog(commands.Cog):
         )
         self.bot.config = self.config
         await interaction.response.send_message(
-            view=_simple_view(
-                "## ✅ IDs Saved\n\n"
-                "Channel and role IDs have been saved to the database and are "
-                "active immediately. They will also be loaded on the next restart.",
-                colour=GREEN,
+            view=success_view(
+                "Config saved.",
+                (
+                    "Rob knows where the furniture lives now.\n\n"
+                    "These IDs are live now and will load again on restart."
+                ),
             ),
             ephemeral=True,
         )
@@ -271,7 +265,7 @@ class RobEventCog(commands.Cog):
     @commands.group(name="event", invoke_without_command=True)
     async def event_group(self, ctx: commands.Context[commands.Bot]) -> None:
         await ctx.reply(
-            "Available: `!event start`  `!event end`  `!event status`",
+            "Rob knows: `!event start` `!event end` `!event status`",
             mention_author=False,
         )
 
@@ -279,10 +273,10 @@ class RobEventCog(commands.Cog):
     async def event_start(self, ctx: commands.Context[commands.Bot]) -> None:
         """MOD: open the event start form."""
         if ctx.guild is None or not isinstance(ctx.author, discord.Member):
-            await ctx.reply("This command only works in a server channel.", mention_author=False)
+            await ctx.reply("Server only.", mention_author=False)
             return
         if not has_admin_command_permissions(ctx.author, self.config):
-            await ctx.reply("You do not have permission to use this command.", mention_author=False)
+            await ctx.reply("Nope. Not for you.", mention_author=False)
             return
         await ctx.reply(
             view=EventStartPromptView(self, owner_id=ctx.author.id),
@@ -293,14 +287,14 @@ class RobEventCog(commands.Cog):
     async def event_end(self, ctx: commands.Context[commands.Bot]) -> None:
         """MOD: confirm early event end."""
         if ctx.guild is None or not isinstance(ctx.author, discord.Member):
-            await ctx.reply("This command only works in a server channel.", mention_author=False)
+            await ctx.reply("Server only.", mention_author=False)
             return
         if not has_admin_command_permissions(ctx.author, self.config):
-            await ctx.reply("You do not have permission to use this command.", mention_author=False)
+            await ctx.reply("Nope. Not for you.", mention_author=False)
             return
         state = await self.ensure_event_state_current()
         if not state.is_active:
-            await ctx.reply("The event is not currently running.", mention_author=False)
+            await ctx.reply("The event is not running.", mention_author=False)
             return
         await ctx.reply(
             view=EventEndConfirmView(self, owner_id=ctx.author.id),
@@ -311,10 +305,10 @@ class RobEventCog(commands.Cog):
     async def event_status(self, ctx: commands.Context[commands.Bot]) -> None:
         """MOD: show current event state."""
         if ctx.guild is None or not isinstance(ctx.author, discord.Member):
-            await ctx.reply("This command only works in a server channel.", mention_author=False)
+            await ctx.reply("Server only.", mention_author=False)
             return
         if not has_admin_command_permissions(ctx.author, self.config):
-            await ctx.reply("You do not have permission to use this command.", mention_author=False)
+            await ctx.reply("Nope. Not for you.", mention_author=False)
             return
         state = await self.ensure_event_state_current()
         domme_count = len(await self.database.get_all_event_dommes())
@@ -372,7 +366,7 @@ class RobEventCog(commands.Cog):
         normalized = normalize_throne_registration_input(raw_value)
         if normalized is None:
             await interaction.response.send_message(
-                "Please enter a valid Throne username or link.", ephemeral=True
+                "That link looks wrong. Try a full Throne link or username.", ephemeral=True
             )
             return
 
@@ -384,7 +378,7 @@ class RobEventCog(commands.Cog):
         )
         if creator is None:
             await interaction.response.send_message(
-                "I couldn't find that Throne account. Double-check the username or link and try again.",
+                "Rob squinted at that link and found nothing. Check it and try again.",
                 ephemeral=True,
             )
             return
@@ -392,11 +386,12 @@ class RobEventCog(commands.Cog):
         await self.database.save_event_domme(user_id=interaction.user.id, throne_url=normalized)
         await self.sync_leaderboard_channel()
         await interaction.response.send_message(
-            view=_simple_view(
-                f"## ✅ You're signed up as a Domme!\n\n"
-                f"I'll track sends on: **{normalized}**\n"
-                "New sends will appear in the send-track channel and leaderboard automatically.",
-                colour=GREEN,
+            view=success_view(
+                "Handled.",
+                (
+                    f"Tracking **{normalized}** now.\n\n"
+                    "New sends land in the tracker and the leaderboard."
+                ),
             ),
             ephemeral=True,
         )
@@ -413,27 +408,28 @@ class RobEventCog(commands.Cog):
 
         sub_name = " ".join(raw_name.strip().split())
         if not sub_name:
-            await interaction.response.send_message("Please enter a name to track.", ephemeral=True)
+            await interaction.response.send_message("Need a name to track.", ephemeral=True)
             return
         if sub_name.casefold() in _RESERVED_SUB_NAMES:
-            await interaction.response.send_message("That name is reserved. Pick something else.", ephemeral=True)
+            await interaction.response.send_message("That name is reserved. Pick another one.", ephemeral=True)
             return
 
         existing = await self.database.get_event_sub_by_name(sub_name=sub_name)
         if existing is not None and existing.user_id != interaction.user.id:
             await interaction.response.send_message(
-                "That name is already taken by another sub.", ephemeral=True
+                "That name is taken already.", ephemeral=True
             )
             return
 
         await self.database.save_event_sub(user_id=interaction.user.id, sub_name=sub_name)
         await self.sync_leaderboard_channel()
         await interaction.response.send_message(
-            view=_simple_view(
-                f"## ✅ You're signed up as a Sub!\n\n"
-                f"Tracking name: **{sub_name}**\n"
-                "Use that exact name when sending on Throne and I'll credit you on the leaderboard.",
-                colour=GREEN,
+            view=success_view(
+                "Handled.",
+                (
+                    f"Tracking name: **{sub_name}**.\n\n"
+                    "Use that exact name on Throne and Rob will do the maths."
+                ),
             ),
             ephemeral=True,
         )
@@ -448,16 +444,16 @@ class RobEventCog(commands.Cog):
         end_time: str,
     ) -> None:
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message("This command only works in the server.", ephemeral=True)
+            await interaction.response.send_message("Server only.", ephemeral=True)
             return
         if not has_admin_command_permissions(interaction.user, self.config):
-            await interaction.response.send_message("You do not have permission.", ephemeral=True)
+            await interaction.response.send_message("Nope. Not for you.", ephemeral=True)
             return
 
         ends_at = self._parse_end_datetime(end_date=end_date, end_time=end_time)
         if ends_at is None:
             await interaction.response.send_message(
-                f"Use `YYYY-MM-DD` for the date and `HH:MM` for the time ({_EVENT_TIMEZONE_LABEL}).",
+                f"That date or time looks wrong. Use `YYYY-MM-DD` and `HH:MM` ({_EVENT_TIMEZONE_LABEL}).",
                 ephemeral=True,
             )
             return
@@ -470,38 +466,40 @@ class RobEventCog(commands.Cog):
 
         end_label = self._format_discord_timestamp(ends_at)
         await interaction.response.send_message(
-            view=_simple_view(
-                f"## 🚀 Event Started!\n\n"
-                f"**{self.config.event_name}** is now live.\n"
-                f"It will end at {end_label}.",
-                colour=GREEN,
+            view=success_view(
+                "Event started.",
+                (
+                    f"**{self.config.event_name}** is live.\n\n"
+                    f"It will end at {end_label}."
+                ),
             ),
             ephemeral=True,
         )
 
     async def process_event_end(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message("This command only works in the server.", ephemeral=True)
+            await interaction.response.send_message("Server only.", ephemeral=True)
             return
         if not has_admin_command_permissions(interaction.user, self.config):
-            await interaction.response.send_message("You do not have permission.", ephemeral=True)
+            await interaction.response.send_message("Nope. Not for you.", ephemeral=True)
             return
 
         state = await self.ensure_event_state_current()
         if not state.is_active:
             await interaction.response.edit_message(
-                view=_simple_view("The event is not currently running.", colour=BLUE),
+                view=info_view("The event is not running."),
             )
             return
 
         await self.database.end_event(ended_by=interaction.user.id)
         await self.sync_leaderboard_channel()
         await interaction.response.edit_message(
-            view=_simple_view(
-                f"## 🔴 Event Ended\n\n"
-                f"**{self.config.event_name}** has ended.\n"
-                "The leaderboards are now frozen.",
-                colour=BLUE,
+            view=info_view(
+                "Event ended.",
+                (
+                    f"**{self.config.event_name}** is done.\n\n"
+                    "The leaderboards are now frozen."
+                ),
             ),
         )
 

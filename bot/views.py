@@ -8,8 +8,40 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from bot import messages
-from bot.embeds import PROFILE_COLOR_PRESETS, build_help_pages, help_page_container
+from bot.ui.cards import (
+    PROFILE_COLOR_PRESETS,
+    build_help_pages,
+    delete_confirm_card,
+    domme_setup_cancelled_card,
+    domme_setup_color_card,
+    domme_setup_details_card,
+    domme_setup_intro_card,
+    domme_setup_later_card,
+    domme_setup_name_card,
+    domme_setup_payments_card,
+    domme_setup_review_card,
+    domme_setup_throne_card,
+    form_link_card,
+    help_page_card,
+    import_ids_confirm_card,
+    import_ids_upload_card,
+    info_view,
+    role_selection_card,
+    staff_review_card,
+    sub_setup_cancelled_card,
+    sub_setup_color_card,
+    sub_setup_details_card,
+    sub_setup_intro_card,
+    sub_setup_kinks_limits_card,
+    sub_setup_later_card,
+    sub_setup_name_card,
+    sub_setup_owner_card,
+    sub_setup_review_card,
+    success_view,
+    verification_panel_card,
+)
+from bot.ui.components import disable_all, replace_container
+from bot.ui.copy import FORM_URL, NOT_YOUR_CONFIRM, NOT_YOUR_HELP, NOT_YOUR_SETUP, NOT_YOURS
 
 if TYPE_CHECKING:
     from bot.verification import (
@@ -27,33 +59,22 @@ def _clean_optional(value: str) -> str | None:
     return cleaned or None
 
 
-def _disable_all(view: discord.ui.View | discord.ui.LayoutView) -> None:
-    for item in view.children:
-        if hasattr(item, "disabled"):
-            item.disabled = True
-
-
 class VerificationPanelView(discord.ui.LayoutView):
     def __init__(self, service: VerificationService) -> None:
         super().__init__(timeout=None)
         self.service = service
+        button = discord.ui.Button(
+            label="Verify",
+            style=discord.ButtonStyle.primary,
+            custom_id="verify_start",
+        )
+        button.callback = self.verify_start
+        self._set_container(verification_panel_card(button))
 
     def _set_container(self, container: discord.ui.Container) -> None:
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
-        self._children.insert(0, container)
+        replace_container(self, container)
 
-    @discord.ui.button(
-        label="Verify",
-        style=discord.ButtonStyle.primary,
-        custom_id="verify_start",
-    )
-    async def verify_start(
-        self,
-        interaction: discord.Interaction,
-        _: discord.ui.Button,
-    ) -> None:
+    async def verify_start(self, interaction: discord.Interaction) -> None:
         await self.service.start_verification(interaction)
 
 
@@ -63,46 +84,54 @@ class RoleSelectionView(discord.ui.LayoutView):
         self.user_id = user_id
         self.selection: str | None = None
         self.message: discord.Message | None = None
+        domme_button = discord.ui.Button(label="Domme", style=discord.ButtonStyle.secondary)
+        domme_button.callback = self._domme
+        submissive_button = discord.ui.Button(
+            label="Submissive",
+            style=discord.ButtonStyle.secondary,
+        )
+        submissive_button.callback = self._submissive
+        self._set_container(
+            role_selection_card(
+                domme_button,
+                submissive_button,
+                selected_role=self.selection,
+            )
+        )
 
     def _set_container(self, container: discord.ui.Container) -> None:
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
-        self._children.insert(0, container)
+        replace_container(self, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
             return True
         await interaction.response.send_message(
-            "This role selection is not for you.",
+            NOT_YOURS,
             ephemeral=True,
         )
         return False
 
-    @discord.ui.button(label="Domme", style=discord.ButtonStyle.secondary)
-    async def domme(
-        self,
-        interaction: discord.Interaction,
-        _: discord.ui.Button,
-    ) -> None:
+    async def _domme(self, interaction: discord.Interaction) -> None:
         await self._select(interaction, "Domme")
 
-    @discord.ui.button(label="Submissive", style=discord.ButtonStyle.secondary)
-    async def submissive(
-        self,
-        interaction: discord.Interaction,
-        _: discord.ui.Button,
-    ) -> None:
+    async def _submissive(self, interaction: discord.Interaction) -> None:
         await self._select(interaction, "Submissive")
 
     async def _select(self, interaction: discord.Interaction, value: str) -> None:
         self.selection = value
-        _disable_all(self)
+        self._set_container(
+            role_selection_card(
+                discord.ui.Button(label="Domme", style=discord.ButtonStyle.secondary, disabled=True),
+                discord.ui.Button(label="Submissive", style=discord.ButtonStyle.secondary, disabled=True),
+                selected_role=self.selection,
+            )
+        )
+        disable_all(self)
         await interaction.response.edit_message(view=self)
         self.stop()
 
     async def on_timeout(self) -> None:
-        _disable_all(self)
+        disable_all(self)
         if self.message:
             try:
                 await self.message.edit(view=self)
@@ -123,47 +152,56 @@ class StaffReviewView(discord.ui.LayoutView):
         self.service = service
         self.request_id = request_id
 
-        approve = discord.ui.Button(
+        approve_button = discord.ui.Button(
             label="Approve",
             style=discord.ButtonStyle.success,
             custom_id=f"verification:approve:{request_id}",
             disabled=disabled,
         )
-        approve.callback = self._approve
-        self.add_item(approve)
+        approve_button.callback = self._approve
 
-        deny_underage = discord.ui.Button(
+        deny_underage_button = discord.ui.Button(
             label="Deny (Under 18)",
             style=discord.ButtonStyle.danger,
             custom_id=f"verification:deny_underage:{request_id}",
             disabled=disabled,
         )
-        deny_underage.callback = self._deny_underage
-        self.add_item(deny_underage)
+        deny_underage_button.callback = self._deny_underage
 
-        deny_invalid = discord.ui.Button(
+        deny_invalid_button = discord.ui.Button(
             label="Deny (Invalid Service)",
             style=discord.ButtonStyle.danger,
             custom_id=f"verification:deny_invalid:{request_id}",
             disabled=disabled,
         )
-        deny_invalid.callback = self._deny_invalid
-        self.add_item(deny_invalid)
+        deny_invalid_button.callback = self._deny_invalid
 
+        link_button: discord.ui.Button | None = None
         if link_url:
-            self.add_item(
-                discord.ui.Button(
-                    label="Open Link",
-                    style=discord.ButtonStyle.link,
-                    url=link_url,
-                )
+            link_button = discord.ui.Button(
+                label="Open Link",
+                style=discord.ButtonStyle.link,
+                url=link_url,
             )
 
+        self._set_container(
+            staff_review_card(
+                request_id=request_id,
+                user_mention="Pending member lookup",
+                user_id=0,
+                selected_role=None,
+                submitted_service=None,
+                submitted_value=link_url,
+                status="Pending review",
+                approve_button=approve_button,
+                deny_underage_button=deny_underage_button,
+                deny_invalid_button=deny_invalid_button,
+                link_button=link_button,
+            )
+        )
+
     def _set_container(self, container: discord.ui.Container) -> None:
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
-        self._children.insert(0, container)
+        replace_container(self, container)
 
     async def _approve(self, interaction: discord.Interaction) -> None:
         if self.service:
@@ -181,19 +219,15 @@ class StaffReviewView(discord.ui.LayoutView):
 class FormLinkView(discord.ui.LayoutView):
     def __init__(self) -> None:
         super().__init__(timeout=None)
-        self.add_item(
-            discord.ui.Button(
-                label="Open Form",
-                style=discord.ButtonStyle.link,
-                url=messages.FORM_URL,
-            )
+        button = discord.ui.Button(
+            label="Open Form",
+            style=discord.ButtonStyle.link,
+            url=FORM_URL,
         )
+        self._set_container(form_link_card(button))
 
     def _set_container(self, container: discord.ui.Container) -> None:
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
-        self._children.insert(0, container)
+        replace_container(self, container)
 
 
 class ReactionRoleSetupModal(discord.ui.Modal, title="Create Reaction Role Message"):
@@ -297,19 +331,16 @@ class HelpView(discord.ui.LayoutView):
         self._set_container()
 
     def _set_container(self) -> None:
-        # Remove old container if present and add fresh one at the front
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
-        container = help_page_container(self.current_page, self.total_pages, self.pages)
-        # Insert container at the beginning (index 0)
-        self._children.insert(0, container)
+        replace_container(
+            self,
+            help_page_card(self.current_page, self.total_pages, self.pages),
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
             return True
         await interaction.response.send_message(
-            "Only the user who opened this help menu can navigate it.",
+            NOT_YOUR_HELP,
             ephemeral=True,
         )
         return False
@@ -323,10 +354,9 @@ class HelpView(discord.ui.LayoutView):
         await self._update(interaction)
 
     async def _close(self, interaction: discord.Interaction) -> None:
-        _disable_all(self)
+        disable_all(self)
         await interaction.response.edit_message(
-            content="Help menu closed.",
-            view=None,
+            view=info_view("Closed.", "Rob returns to the cupboard."),
         )
         self.stop()
 
@@ -348,22 +378,18 @@ class DommeSetupView(discord.ui.LayoutView):
         self.session = session
 
     def _set_container(self, container: discord.ui.Container) -> None:
-        """Replace any existing container with the new one at the front."""
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
-        self._children.insert(0, container)
+        replace_container(self, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.session.user_id:
             return True
-        await interaction.response.send_message("This setup is not for you.", ephemeral=True)
+        await interaction.response.send_message(NOT_YOUR_SETUP, ephemeral=True)
         return False
 
     async def on_timeout(self) -> None:
         if self.session.current_view is not self:
             return
-        _disable_all(self)
+        disable_all(self)
         if self.session.message:
             try:
                 await self.session.message.edit(view=self)
@@ -374,6 +400,10 @@ class DommeSetupView(discord.ui.LayoutView):
 
 
 class DommeSetupIntroView(DommeSetupView):
+    def __init__(self, service: DommeProfileService, session: DommeProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(domme_setup_intro_card())
+
     @discord.ui.button(label="Continue", style=discord.ButtonStyle.primary)
     async def continue_button(
         self,
@@ -396,6 +426,15 @@ class DommeSetupIntroView(DommeSetupView):
 
 
 class DommeSetupNameView(DommeSetupView):
+    def __init__(self, service: DommeProfileService, session: DommeProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(
+            domme_setup_name_card(
+                name=session.name,
+                honorific=session.honorific,
+            )
+        )
+
     @discord.ui.button(label="Name + Honorific", style=discord.ButtonStyle.primary)
     async def open_modal(
         self,
@@ -422,6 +461,18 @@ class DommeSetupNameView(DommeSetupView):
 
 
 class DommeSetupDetailsView(DommeSetupView):
+    def __init__(self, service: DommeProfileService, session: DommeProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(
+            domme_setup_details_card(
+                pronouns=session.pronouns,
+                age=session.age,
+                tribute_price=session.tribute_price,
+                kinks=session.kinks,
+                limits=session.limits,
+            )
+        )
+
     @discord.ui.button(label="Add Details", style=discord.ButtonStyle.primary)
     async def open_modal(
         self,
@@ -448,6 +499,23 @@ class DommeSetupDetailsView(DommeSetupView):
 
 
 class DommeSetupPaymentsView(DommeSetupView):
+    def __init__(self, service: DommeProfileService, session: DommeProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(
+            domme_setup_payments_card(
+                throne=session.throne,
+                tribute_link=session.tribute_link,
+                payment_link1=session.payment_link1,
+                payment_link2=session.payment_link2,
+                payment_link3=session.payment_link3,
+                payment_link4=session.payment_link4,
+                content_link1=session.content_link1,
+                content_link2=session.content_link2,
+                content_link3=session.content_link3,
+                content_link4=session.content_link4,
+            )
+        )
+
     @discord.ui.button(label="Throne & Tribute", style=discord.ButtonStyle.primary)
     async def throne_tribute_button(
         self,
@@ -498,6 +566,10 @@ class DommeSetupPaymentsView(DommeSetupView):
 
 
 class DommeSetupThroneView(DommeSetupView):
+    def __init__(self, service: DommeProfileService, session: DommeProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(domme_setup_throne_card(throne=session.throne))
+
     @discord.ui.button(label="Sign Up", style=discord.ButtonStyle.success)
     async def sign_up_button(
         self,
@@ -526,6 +598,10 @@ class DommeSetupThroneView(DommeSetupView):
 
 
 class DommeSetupColorView(DommeSetupView):
+    def __init__(self, service: DommeProfileService, session: DommeProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(domme_setup_color_card(profile_color=session.profile_color))
+
     @discord.ui.select(
         placeholder="Choose a profile colour…",
         options=[
@@ -562,6 +638,32 @@ class DommeSetupColorView(DommeSetupView):
 
 
 class DommeSetupReviewView(DommeSetupView):
+    def __init__(self, service: DommeProfileService, session: DommeProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(
+            domme_setup_review_card(
+                name=session.name,
+                honorific=session.honorific,
+                pronouns=session.pronouns,
+                age=session.age,
+                tribute_price=session.tribute_price,
+                throne=session.throne,
+                tribute_link=session.tribute_link,
+                payment_link1=session.payment_link1,
+                payment_link2=session.payment_link2,
+                payment_link3=session.payment_link3,
+                payment_link4=session.payment_link4,
+                content_link1=session.content_link1,
+                content_link2=session.content_link2,
+                content_link3=session.content_link3,
+                content_link4=session.content_link4,
+                profile_color=session.profile_color,
+                throne_tracking_enabled=session.throne_tracking_enabled,
+                kinks=session.kinks,
+                limits=session.limits,
+            )
+        )
+
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
     async def confirm_button(
         self,
@@ -591,39 +693,53 @@ class DommeSetupReviewView(DommeSetupView):
         await self.service.show_color_step(self.session, interaction)
 
 
-class DommeDeleteConfirmView(discord.ui.View):
+class DommeDeleteConfirmView(discord.ui.LayoutView):
     def __init__(self, service: DommeProfileService, user_id: int) -> None:
         super().__init__(timeout=120)
         self.service = service
         self.user_id = user_id
         self.message: discord.Message | None = None
+        delete_button = discord.ui.Button(
+            label="Delete",
+            style=discord.ButtonStyle.danger,
+        )
+        delete_button.callback = self._delete
+        cancel_button = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+        )
+        cancel_button.callback = self._cancel
+        replace_container(
+            self,
+            delete_confirm_card(
+                title="🗑️ Delete Domme Profile?",
+                body="This removes the saved Domme profile and its public card.",
+                delete_button=delete_button,
+                cancel_button=cancel_button,
+            ),
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
             return True
-        await interaction.response.send_message("This confirmation is not for you.", ephemeral=True)
+        await interaction.response.send_message(NOT_YOUR_CONFIRM, ephemeral=True)
         return False
 
-    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger)
-    async def delete_button(
-        self,
-        interaction: discord.Interaction,
-        _: discord.ui.Button,
-    ) -> None:
+    async def _delete(self, interaction: discord.Interaction) -> None:
         await self.service.delete_profile(interaction, self.user_id)
         self.stop()
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-    async def cancel_button(
-        self,
-        interaction: discord.Interaction,
-        _: discord.ui.Button,
-    ) -> None:
-        await interaction.response.edit_message(content="Domme profile deletion cancelled.", view=None)
+    async def _cancel(self, interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(
+            view=info_view(
+                "Cancelled.",
+                "No changes. No witnesses.",
+            )
+        )
         self.stop()
 
     async def on_timeout(self) -> None:
-        _disable_all(self)
+        disable_all(self)
         if self.message:
             try:
                 await self.message.edit(view=self)
@@ -842,22 +958,18 @@ class SubSetupView(discord.ui.LayoutView):
         self.session = session
 
     def _set_container(self, container: discord.ui.Container) -> None:
-        """Replace any existing container with the new one at the front."""
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
-        self._children.insert(0, container)
+        replace_container(self, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.session.user_id:
             return True
-        await interaction.response.send_message("This setup is not for you.", ephemeral=True)
+        await interaction.response.send_message(NOT_YOUR_SETUP, ephemeral=True)
         return False
 
     async def on_timeout(self) -> None:
         if self.session.current_view is not self:
             return
-        _disable_all(self)
+        disable_all(self)
         if self.session.message:
             try:
                 await self.session.message.edit(view=self)
@@ -868,6 +980,10 @@ class SubSetupView(discord.ui.LayoutView):
 
 
 class SubSetupIntroView(SubSetupView):
+    def __init__(self, service: SubProfileService, session: SubProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(sub_setup_intro_card())
+
     @discord.ui.button(label="Continue", style=discord.ButtonStyle.primary)
     async def continue_button(
         self,
@@ -890,6 +1006,10 @@ class SubSetupIntroView(SubSetupView):
 
 
 class SubSetupNameView(SubSetupView):
+    def __init__(self, service: SubProfileService, session: SubProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(sub_setup_name_card(throne_name=session.throne_name))
+
     @discord.ui.button(label="Set Throne Name", style=discord.ButtonStyle.primary)
     async def set_name_button(
         self,
@@ -916,6 +1036,24 @@ class SubSetupNameView(SubSetupView):
 
 
 class SubSetupReviewView(SubSetupView):
+    def __init__(self, service: SubProfileService, session: SubProfileSession) -> None:
+        super().__init__(service, session)
+        owner_label = None
+        if session.owned_by_domme_user_id is not None:
+            owner_label = f"<@{session.owned_by_domme_user_id}>"
+        self._set_container(
+            sub_setup_review_card(
+                throne_name=session.throne_name,
+                name=session.name,
+                pronouns=session.pronouns,
+                age=session.age,
+                kinks=session.kinks,
+                limits=session.limits,
+                profile_color=session.profile_color,
+                owned_by_label=owner_label,
+            )
+        )
+
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
     async def confirm_button(
         self,
@@ -945,39 +1083,53 @@ class SubSetupReviewView(SubSetupView):
         await self.service.show_owner_step(self.session, interaction)
 
 
-class SubDeleteConfirmView(discord.ui.View):
+class SubDeleteConfirmView(discord.ui.LayoutView):
     def __init__(self, service: SubProfileService, user_id: int) -> None:
         super().__init__(timeout=120)
         self.service = service
         self.user_id = user_id
         self.message: discord.Message | None = None
+        delete_button = discord.ui.Button(
+            label="Delete",
+            style=discord.ButtonStyle.danger,
+        )
+        delete_button.callback = self._delete
+        cancel_button = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.secondary,
+        )
+        cancel_button.callback = self._cancel
+        replace_container(
+            self,
+            delete_confirm_card(
+                title="🗑️ Delete Sub Profile?",
+                body="This removes the saved Sub profile and its public card.",
+                delete_button=delete_button,
+                cancel_button=cancel_button,
+            ),
+        )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.user_id:
             return True
-        await interaction.response.send_message("This confirmation is not for you.", ephemeral=True)
+        await interaction.response.send_message(NOT_YOUR_CONFIRM, ephemeral=True)
         return False
 
-    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger)
-    async def delete_button(
-        self,
-        interaction: discord.Interaction,
-        _: discord.ui.Button,
-    ) -> None:
+    async def _delete(self, interaction: discord.Interaction) -> None:
         await self.service.delete_profile(interaction, self.user_id)
         self.stop()
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-    async def cancel_button(
-        self,
-        interaction: discord.Interaction,
-        _: discord.ui.Button,
-    ) -> None:
-        await interaction.response.edit_message(content="Sub profile deletion cancelled.", view=None)
+    async def _cancel(self, interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(
+            view=info_view(
+                "Cancelled.",
+                "No changes made.",
+            )
+        )
         self.stop()
 
     async def on_timeout(self) -> None:
-        _disable_all(self)
+        disable_all(self)
         if self.message:
             try:
                 await self.message.edit(view=self)
@@ -1007,6 +1159,16 @@ class SubThroneNameModal(discord.ui.Modal, title="Throne Name"):
 
 
 class SubSetupDetailsView(SubSetupView):
+    def __init__(self, service: SubProfileService, session: SubProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(
+            sub_setup_details_card(
+                name=session.name,
+                pronouns=session.pronouns,
+                age=session.age,
+            )
+        )
+
     @discord.ui.button(label="Add Details", style=discord.ButtonStyle.primary)
     async def open_modal(
         self,
@@ -1069,6 +1231,15 @@ class SubDetailsModal(discord.ui.Modal, title="Personal Details"):
 
 
 class SubSetupKinksLimitsView(SubSetupView):
+    def __init__(self, service: SubProfileService, session: SubProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(
+            sub_setup_kinks_limits_card(
+                kinks=session.kinks,
+                limits=session.limits,
+            )
+        )
+
     @discord.ui.button(label="Add Kinks & Limits", style=discord.ButtonStyle.primary)
     async def open_modal(
         self,
@@ -1127,6 +1298,10 @@ class SubKinksLimitsModal(discord.ui.Modal, title="Kinks & Limits"):
 
 
 class SubSetupColorView(SubSetupView):
+    def __init__(self, service: SubProfileService, session: SubProfileSession) -> None:
+        super().__init__(service, session)
+        self._set_container(sub_setup_color_card(profile_color=session.profile_color))
+
     @discord.ui.select(
         placeholder="Choose a profile colour…",
         options=[
@@ -1178,6 +1353,10 @@ class SubSetupOwnerView(SubSetupView):
     ) -> None:
         super().__init__(service, session)
         self.add_item(_OwnerSelect(options))
+        selected = None
+        if session.owned_by_domme_user_id is not None:
+            selected = f"<@{session.owned_by_domme_user_id}>"
+        self._set_container(sub_setup_owner_card(owned_by_label=selected))
 
     @discord.ui.button(label="Continue", style=discord.ButtonStyle.success)
     async def continue_button(
@@ -1206,7 +1385,7 @@ class SubSetupOwnerView(SubSetupView):
 
 
 # ---------------------------------------------------------------------------
-# !import ids — file-upload flow to configure channel/role IDs in-Discord
+# !import — file-upload flow to configure channel/role IDs in-Discord
 # ---------------------------------------------------------------------------
 
 _IMPORT_FIELD_NAMES = (
@@ -1314,10 +1493,10 @@ def _parse_ids_file(content: str, filename: str) -> tuple[dict[str, int], list[s
                 for k, v in data.items():
                     raw_pairs.append((str(k), str(v)))
             else:
-                warnings.append("JSON is not a top-level object — falling back to text parsing.")
+                warnings.append("That JSON is weird. Trying text mode.")
                 raw_pairs = []  # ensure text parser runs
         except _json.JSONDecodeError:
-            warnings.append("File looks like JSON but couldn't be parsed — trying text mode.")
+            warnings.append("That JSON fell over. Trying text mode.")
 
     # --- text parsing (KEY=VALUE or KEY: VALUE) ---
     if not raw_pairs:
@@ -1338,15 +1517,15 @@ def _parse_ids_file(content: str, filename: str) -> tuple[dict[str, int], list[s
     for raw_key, raw_value in raw_pairs:
         canonical = _resolve_key(raw_key)
         if canonical is None:
-            warnings.append(f"Unknown key `{raw_key}` — skipped.")
+            warnings.append(f"Unknown key `{raw_key}`. Rob ignored it.")
             continue
         # Strip quotes / whitespace
         value_clean = raw_value.strip().strip('"').strip("'")
         if not _DIGITS_ONLY_RE.fullmatch(value_clean):
-            warnings.append(f"`{canonical}` — expected a numeric ID, got `{value_clean}`.")
+            warnings.append(f"`{canonical}` wants a Discord ID. Got `{value_clean}`.")
             continue
         if canonical in parsed:
-            warnings.append(f"`{canonical}` appeared more than once — kept first value.")
+            warnings.append(f"`{canonical}` showed up twice. Rob kept the first one.")
             continue
         parsed[canonical] = int(value_clean)
 
@@ -1366,22 +1545,26 @@ def _write_channels_py(parsed: dict[str, int]) -> str | None:
 class ImportIdsConfirmView(discord.ui.LayoutView):
     """Confirm / Cancel buttons shown after the file is parsed."""
 
-    def __init__(self, parsed: dict[str, int], *, invoker_id: int) -> None:
+    def __init__(
+        self,
+        parsed: dict[str, int],
+        warnings: list[str],
+        *,
+        invoker_id: int,
+    ) -> None:
         super().__init__(timeout=_IMPORT_IDS_CONFIRM_TIMEOUT_SECONDS)
         self._parsed = parsed
         self._invoker_id = invoker_id
+        self._set_container(import_ids_confirm_card(parsed, warnings))
 
     def _set_container(self, container: discord.ui.Container) -> None:
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
-        self._children.insert(0, container)
+        replace_container(self, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self._invoker_id:
             return True
         await interaction.response.send_message(
-            "Only the person who ran `!import ids` can confirm this.",
+            NOT_YOUR_CONFIRM,
             ephemeral=True,
         )
         return False
@@ -1392,21 +1575,21 @@ class ImportIdsConfirmView(discord.ui.LayoutView):
         interaction: discord.Interaction,
         _: discord.ui.Button,
     ) -> None:
-        _disable_all(self)
-        # Remove container when showing just a result message
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
+        disable_all(self)
         err = _write_channels_py(self._parsed)
         if err:
             await interaction.response.edit_message(
-                content=f"❌ Could not write `channels.py`: {err}",
-                view=self,
+                view=info_view(
+                    "Could not write `channels.py`.",
+                    err,
+                ),
             )
         else:
             await interaction.response.edit_message(
-                content="✅ **`channels.py` saved!** Restart the bot to apply.",
-                view=self,
+                view=success_view(
+                    "Saved.",
+                    "Restart the bot so Rob can use the new IDs.",
+                ),
             )
         self.stop()
 
@@ -1416,14 +1599,12 @@ class ImportIdsConfirmView(discord.ui.LayoutView):
         interaction: discord.Interaction,
         _: discord.ui.Button,
     ) -> None:
-        _disable_all(self)
-        # Remove container when showing just a result message
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
+        disable_all(self)
         await interaction.response.edit_message(
-            content="Import cancelled — nothing was saved.",
-            view=self,
+            view=info_view(
+                "Cancelled.",
+                "Nothing changed.",
+            ),
         )
         self.stop()
 
@@ -1434,35 +1615,34 @@ class ImportIdsUploadView(discord.ui.LayoutView):
     def __init__(self, *, invoker_id: int) -> None:
         super().__init__(timeout=_IMPORT_IDS_BUTTON_TIMEOUT_SECONDS)
         self._invoker_id = invoker_id
+        button = discord.ui.Button(
+            label="Upload File",
+            style=discord.ButtonStyle.primary,
+            emoji="📂",
+        )
+        button.callback = self._upload_file
+        self._set_container(import_ids_upload_card(button))
 
     def _set_container(self, container: discord.ui.Container) -> None:
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Container):
-                self.remove_item(item)
-        self._children.insert(0, container)
+        replace_container(self, container)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self._invoker_id:
             return True
         await interaction.response.send_message(
-            "Only the person who ran `!import ids` can use this.",
+            NOT_YOUR_CONFIRM,
             ephemeral=True,
         )
         return False
 
-    @discord.ui.button(label="Upload File", style=discord.ButtonStyle.primary, emoji="📂")
-    async def upload_file(
-        self,
-        interaction: discord.Interaction,
-        _: discord.ui.Button,
-    ) -> None:
+    async def _upload_file(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
-            f"📎 Upload your `.json` or `.txt` file as an attachment in this channel.\n"
+            f"📎 Drop the `.json` or `.txt` file in this channel.\n"
             f"You have {_IMPORT_IDS_UPLOAD_TIMEOUT_SECONDS} seconds.",
             ephemeral=True,
         )
         self.stop()
-        _disable_all(self)
+        disable_all(self)
 
         def check(m: discord.Message) -> bool:
             return (
@@ -1479,7 +1659,7 @@ class ImportIdsUploadView(discord.ui.LayoutView):
             )
         except asyncio.TimeoutError:
             await interaction.followup.send(
-                "⏱️ Timed out waiting for a file upload.",
+                "⏱️ Timed out. Rob gave up waiting for the file.",
                 ephemeral=True,
             )
             return
@@ -1510,7 +1690,7 @@ class ImportIdsUploadView(discord.ui.LayoutView):
         ]
         if missing:
             await interaction.followup.send(
-                f"❌ Could not find the following required IDs in your file:\n"
+                f"❌ Rob could not find these IDs:\n"
                 + "\n".join(f"• `{f}`" for f in missing)
                 + "\n\nCheck the field names and try again.",
                 ephemeral=True,
@@ -1521,10 +1701,11 @@ class ImportIdsUploadView(discord.ui.LayoutView):
         for field in _OPTIONAL_IMPORT_FIELDS:
             parsed.setdefault(field, 0)
 
-        from bot.embeds import import_ids_confirm_container  # local to avoid circular import
-
-        confirm_view = ImportIdsConfirmView(parsed, invoker_id=interaction.user.id)
-        confirm_view._set_container(import_ids_confirm_container(parsed, warnings))
+        confirm_view = ImportIdsConfirmView(
+            parsed,
+            warnings,
+            invoker_id=interaction.user.id,
+        )
         await interaction.followup.send(
             view=confirm_view,
             ephemeral=True,

@@ -8,7 +8,7 @@ inserted into the event send table, and posted to the configured send-track
 channel.
 
 The very first poll for a given Domme **seeds** the database with the current
-page contents but does not post embeds — this prevents a flood of historic
+page contents but does not post notification cards — this prevents a flood of historic
 sends the first time a Domme opts in.
 """
 
@@ -190,7 +190,7 @@ class ThroneTrackerCog(commands.Cog):
 
         # First-run baseline: if we've never seen any sends for this Domme,
         # store the current page as seeded (claim/leaderboard counts still
-        # update) but do not post embeds.
+        # update) but do not post notification cards.
         is_first_run = not await self.database.has_any_event_sends_for_domme(
             domme_user_id=profile.user_id
         )
@@ -222,13 +222,13 @@ class ThroneTrackerCog(commands.Cog):
             )
             if send_id is None or is_first_run:
                 # Either skipped due to duplicate external_id, or this is the
-                # baseline seed for a brand-new Domme — don't post an embed.
+                # baseline seed for a brand-new Domme — don't post a card.
                 continue
-            await self._post_send_embed(profile.user_id, send_id)
+            await self._post_send_card(profile.user_id, send_id)
             posted += 1
         return posted
 
-    async def _post_send_embed(self, domme_user_id: int, send_id: int) -> None:
+    async def _post_send_card(self, domme_user_id: int, send_id: int) -> None:
         if not self.config.send_track_channel_id:
             return
         guild = self.bot.get_guild(self.config.guild_id)
@@ -237,7 +237,7 @@ class ThroneTrackerCog(commands.Cog):
         channel = guild.get_channel(self.config.send_track_channel_id)
         if not isinstance(channel, discord.TextChannel):
             log.warning(
-                "Send-track channel %s is not a text channel; cannot post send embed.",
+                "Send-track channel %s is not a text channel; cannot post send card.",
                 self.config.send_track_channel_id,
             )
             return
