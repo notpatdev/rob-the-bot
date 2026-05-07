@@ -112,134 +112,6 @@ class EventStartModal(discord.ui.Modal, title="Set Event End Time"):
         )
 
 
-class ImportChannelsModal(discord.ui.Modal, title="Configure — Channels & Guild"):
-    """Step 1 of 2: channel IDs and guild ID."""
-
-    guild_id_field: discord.ui.TextInput = discord.ui.TextInput(
-        label="Guild (Server) ID",
-        placeholder="Right-click the server → Copy Server ID",
-        min_length=17,
-        max_length=20,
-    )
-    reg_channel: discord.ui.TextInput = discord.ui.TextInput(
-        label="Registration Channel ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-    lb_channel: discord.ui.TextInput = discord.ui.TextInput(
-        label="Leaderboard Channel ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-    send_channel: discord.ui.TextInput = discord.ui.TextInput(
-        label="Send-Track Channel ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-    mod_role: discord.ui.TextInput = discord.ui.TextInput(
-        label="Moderation Role ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-
-    def __init__(self, cog: RobEventCog, prefill_guild_id: int) -> None:
-        super().__init__(timeout=300)
-        self.cog = cog
-        if prefill_guild_id:
-            self.guild_id_field.default = str(prefill_guild_id)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            guild_id = int(self.guild_id_field.value.strip())
-            reg = int(self.reg_channel.value.strip())
-            lb = int(self.lb_channel.value.strip())
-            send = int(self.send_channel.value.strip())
-            mod = int(self.mod_role.value.strip())
-        except ValueError:
-            await interaction.response.send_message(
-                "All IDs must be numeric. Please try again.", ephemeral=True
-            )
-            return
-        await interaction.response.send_modal(
-            ImportRolesModal(
-                self.cog,
-                guild_id=guild_id,
-                registration_channel_id=reg,
-                leaderboard_channel_id=lb,
-                send_track_channel_id=send,
-                moderation_role_id=mod,
-            )
-        )
-
-
-class ImportRolesModal(discord.ui.Modal, title="Configure — Roles"):
-    """Step 2 of 2: role IDs."""
-
-    domme_role: discord.ui.TextInput = discord.ui.TextInput(
-        label="Domme Role ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-    sub_role: discord.ui.TextInput = discord.ui.TextInput(
-        label="Submissive Role ID",
-        placeholder="1234567890123456789",
-        min_length=17,
-        max_length=20,
-    )
-    ban_role: discord.ui.TextInput = discord.ui.TextInput(
-        label="Event Ban Role ID (optional — leave blank to skip)",
-        placeholder="1234567890123456789",
-        required=False,
-        max_length=20,
-    )
-
-    def __init__(
-        self,
-        cog: RobEventCog,
-        *,
-        guild_id: int,
-        registration_channel_id: int,
-        leaderboard_channel_id: int,
-        send_track_channel_id: int,
-        moderation_role_id: int,
-    ) -> None:
-        super().__init__(timeout=300)
-        self.cog = cog
-        self._guild_id = guild_id
-        self._registration_channel_id = registration_channel_id
-        self._leaderboard_channel_id = leaderboard_channel_id
-        self._send_track_channel_id = send_track_channel_id
-        self._moderation_role_id = moderation_role_id
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            domme = int(self.domme_role.value.strip())
-            sub = int(self.sub_role.value.strip())
-        except ValueError:
-            await interaction.response.send_message(
-                "Role IDs must be numeric. Please try again.", ephemeral=True
-            )
-            return
-        ban_str = self.ban_role.value.strip()
-        ban = int(ban_str) if ban_str.isdigit() else 0
-        await self.cog.save_config_ids(
-            interaction=interaction,
-            guild_id=self._guild_id,
-            registration_channel_id=self._registration_channel_id,
-            leaderboard_channel_id=self._leaderboard_channel_id,
-            send_track_channel_id=self._send_track_channel_id,
-            moderation_role_id=self._moderation_role_id,
-            domme_role_id=domme,
-            submissive_role_id=sub,
-            event_ban_role_id=ban,
-        )
-
-
 # ─── Command-response LayoutViews ─────────────────────────────────────────────
 
 class EventStartPromptView(discord.ui.LayoutView):
@@ -340,61 +212,23 @@ class EventEndConfirmView(discord.ui.LayoutView):
         )
 
 
-class ImportPromptView(discord.ui.LayoutView):
-    """Sent in reply to !import id — button opens ImportChannelsModal."""
 
-    def __init__(self, cog: RobEventCog, *, owner_id: int, guild_id: int) -> None:
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.owner_id = owner_id
-        self.guild_id = guild_id
-
-        btn = discord.ui.Button(
-            label="Configure IDs",
-            style=discord.ButtonStyle.primary,
-            emoji="⚙️",
-        )
-        btn.callback = self._configure
-
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "## ⚙️ Configure Channel & Role IDs\n\n"
-                    "Two forms will open in sequence. Fill in your server's channel and "
-                    "role IDs — the configuration is saved to the database immediately."
-                ),
-                discord.ui.Separator(),
-                discord.ui.Section("Open the configuration forms.", accessory=btn),
-                accent_color=BLUE,
-            )
-        )
-
-    async def _configure(self, interaction: discord.Interaction) -> None:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "Only the person who ran this command can use this button.",
-                ephemeral=True,
-            )
-            return
-        await interaction.response.send_modal(
-            ImportChannelsModal(self.cog, prefill_guild_id=self.guild_id)
-        )
-
-
-# ─── Leaderboard channel views (no buttons — auto-updated, timeout=None) ──────
+# ─── Leaderboard channel views ────────────────────────────────────────────────
 
 class SubLeaderboardView(discord.ui.LayoutView):
-    """Message 1 in the leaderboard channel: sub rankings + event status."""
+    """Message 1 in the leaderboard channel: send rankings + event status."""
 
     def __init__(
         self,
         *,
+        cog: RobEventCog,
         event_name: str,
         state: object,  # EventState
-        rows: list[tuple[str, float, int]],   # (mention, total_usd, send_count)
+        rows: list[tuple[str | None, int, float, int]],  # (display_name|None, user_id, total_usd, send_count)
         unclaimed_total: float,
     ) -> None:
         super().__init__(timeout=None)
+        self._cog = cog
 
         # ── Status line ──────────────────────────────────────────────────────
         is_active = getattr(state, "is_active", False)
@@ -416,14 +250,25 @@ class SubLeaderboardView(discord.ui.LayoutView):
         else:
             status = "⚪ Event not started yet"
 
+        # ── Claim Send button ─────────────────────────────────────────────────
+        claim_btn = discord.ui.Button(
+            label="Claim Send",
+            style=discord.ButtonStyle.primary,
+            emoji="💸",
+        )
+        claim_btn.callback = self._claim_send
+
         # ── Rankings text ─────────────────────────────────────────────────────
         if rows:
             lines: list[str] = []
-            for i, (mention, total, sends) in enumerate(rows, 1):
-                suffix = "send" if sends == 1 else "sends"
-                lines.append(
-                    f"{_medal(i)} {mention} — **{format_money(total)}** ({sends} {suffix})"
+            for i, (name, user_id, total, _sends) in enumerate(rows, 1):
+                mention = f"<@{user_id}>"
+                name_part = (
+                    f"**{discord.utils.escape_markdown(name)}** ({mention})"
+                    if name
+                    else mention
                 )
+                lines.append(f"{i}. {name_part} — **{format_money(total)}**")
             rankings_text = "\n".join(lines)
             if len(rows) >= 20:
                 rankings_text += (
@@ -432,25 +277,35 @@ class SubLeaderboardView(discord.ui.LayoutView):
         else:
             rankings_text = (
                 "*No ranked subs yet.*\n"
-                "-# Subs: use `/register action:sub` to link your Throne name."
+                "-# Subs: use the **Claim Send** button to link your Throne name."
             )
+
+        # ── Footer ────────────────────────────────────────────────────────────
+        now_ts = int(datetime.now(timezone.utc).timestamp())
 
         # ── Build container ───────────────────────────────────────────────────
-        components: list[discord.ui.Item] = [
-            discord.ui.TextDisplay(f"## 🏆 {event_name} — Sub Leaderboard\n{status}"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay(rankings_text),
-        ]
-        if unclaimed_total > 0.01:
-            components.append(discord.ui.Separator())
-            components.append(
-                discord.ui.TextDisplay(
-                    f"-# 💬 {format_money(unclaimed_total)} in sends is unclaimed — "
-                    "those subs haven't registered yet."
-                )
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"## 🏆 {event_name} — Send Leaderboard\n{status}"),
+                discord.ui.Separator(),
+                discord.ui.Section(
+                    f"**Unclaimed Sends:** {format_money(unclaimed_total)}",
+                    accessory=claim_btn,
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(rankings_text),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"-# Made with Love by Pat | <t:{now_ts}:f>"),
+                accent_color=PURPLE,
             )
+        )
 
-        self.add_item(discord.ui.Container(*components, accent_color=PURPLE))
+    async def _claim_send(self, interaction: discord.Interaction) -> None:
+        reason = await self._cog.get_signup_block_reason(interaction, signup_type="sub")
+        if reason is not None:
+            await interaction.response.send_message(reason, ephemeral=True)
+            return
+        await interaction.response.send_modal(SubSignupModal(self._cog))
 
 
 class DommeTotalsView(discord.ui.LayoutView):
@@ -604,7 +459,7 @@ class UpdateNotificationView(discord.ui.LayoutView):
         ack_btn = discord.ui.Button(
             label="Acknowledge",
             style=discord.ButtonStyle.success,
-            emoji="✓",
+            emoji="✅",
         )
         ack_btn.callback = self._acknowledge
 

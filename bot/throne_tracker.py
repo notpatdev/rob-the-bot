@@ -25,7 +25,7 @@ from discord.ext import commands, tasks
 from bot.config import BotConfig
 from bot.database import Database, EventDommeRegistration
 from bot.event_embeds import format_money
-from bot.event_views import SendNotificationView
+from bot.event_views import SendNotificationView, _simple_view, BLUE, GREEN
 from bot.throne_scraper import ScrapedSend, fetch_recent_sends, normalize_throne_url
 
 log = logging.getLogger(__name__)
@@ -286,3 +286,111 @@ class ThroneTrackerCog(commands.Cog):
                 send_id,
                 self.config.send_track_channel_id,
             )
+
+    # ──────────────────────────────── !throne (DEV) ───────────────────────────
+
+    async def _is_owner(self, ctx: commands.Context) -> bool:
+        """Return True if the invoker is the bot application owner; reply and return False otherwise."""
+        try:
+            app = await self.bot.application_info()
+            owner_id = app.owner.id if app.owner else None
+        except discord.HTTPException:
+            owner_id = None
+        if owner_id is None or ctx.author.id != owner_id:
+            await ctx.reply("Only the bot owner can use this command.", mention_author=False)
+            return False
+        return True
+
+    @commands.group(name="throne", invoke_without_command=True)
+    async def throne_group(self, ctx: commands.Context) -> None:
+        if not await self._is_owner(ctx):
+            return
+        await ctx.reply(
+            "Available: `!throne refresh`  `!throne status`  `!throne list`",
+            mention_author=False,
+        )
+
+    @throne_group.command(name="refresh")
+    async def throne_refresh(self, ctx: commands.Context) -> None:
+        """DEV: force an immediate Throne poll cycle and report new sends."""
+        if not await self._is_owner(ctx):
+            return
+        posted = await self._run_poll_cycle()
+        suffix = "send" if posted == 1 else "sends"
+        await ctx.reply(
+            view=_simple_view(
+                f"## ✅ Throne Refresh Complete\n\n{posted} new {suffix} posted.",
+                colour=GREEN,
+            ),
+            mention_author=False,
+        )
+
+    @throne_group.command(name="status")
+    async def throne_status(self, ctx: commands.Context) -> None:
+        """DEV: show Throne poller status, failure counts, and next poll time."""
+        if not await self._is_owner(ctx):
+            return
+
+        profiles = await self.database.get_all_event_dommes()
+        tracked = [p for p in profiles if normalize_throne_url(p.throne_url) is not None]
+
+        loop_running = self.poll_throne_pages.is_running()
+        loop_status = "🟢 Running" if loop_running else "🔴 Stopped"
+
+        next_iter = self.poll_throne_pages.next_iteration
+        if next_iter is not None:
+            next_ts = int(next_iter.timestamp())
+            next_str = f"<t:{next_ts}:R>"
+        else:
+            next_str = "not scheduled"
+
+        now = time.monotonic()
+        lines = [
+            f"## 📡 Throne Poller Status\n",
+            f"**Loop:** {loop_status}",
+            f"**Next poll:** {next_str}",
+            f"**Tracked dommes:** {len(tracked)}",
+        ]
+
+        if self._failure_counts:
+            lines.append("\n**Failure counts:**")
+            for uid, count in self._failure_counts.items():
+                in_slow = self._slow_retry_until.get(uid, 0) > now
+                slow_label = " *(slow retry — 1 h backoff)*" if in_slow else ""
+                suffix = "failure" if count == 1 else "failures"
+                lines.append(f"- <@{uid}>: {count} {suffix}{slow_label}")
+
+        await ctx.reply(
+            view=_simple_view("\n".join(lines), colour=BLUE),
+            mention_author=False,
+        )
+
+    @throne_group.command(name="list")
+    async def throne_list(self, ctx: commands.Context) -> None:
+        """DEV: list all registered Throne dommes with their URLs and tracker state."""
+        if not await self._is_owner(ctx):
+            return
+
+        profiles = await self.database.get_all_event_dommes()
+        if not profiles:
+            await ctx.reply(
+                view=_simple_view("No dommes registered yet.", colour=BLUE),
+                mention_author=False,
+            )
+            return
+
+        now = time.monotonic()
+        lines = [f"## 👑 Registered Dommes ({len(profiles)})\n"]
+        for p in profiles:
+            in_slow = self._slow_retry_until.get(p.user_id, 0) > now
+            slow_label = " 🐢 *slow retry*" if in_slow else ""
+            fails = self._failure_counts.get(p.user_id, 0)
+            fail_label = (
+                f" *(❌ {fails} failure{'s' if fails != 1 else ''})*" if fails > 0 else ""
+            )
+            lines.append(f"- <@{p.user_id}> — `{p.throne_url}`{fail_label}{slow_label}")
+
+        await ctx.reply(
+            view=_simple_view("\n".join(lines), colour=BLUE),
+            mention_author=False,
+        )

@@ -39,7 +39,6 @@ class RobBot(commands.Bot):
 
         event_cog = RobEventCog(self, self.config, self.database)
         await self.add_cog(event_cog)
-        await event_cog.restore_runtime()
 
         await self.add_cog(ThroneTrackerCog(self, self.config, self.database))
 

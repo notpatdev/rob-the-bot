@@ -109,17 +109,6 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_CONFIG_INT_KEYS = frozenset({
-    "guild_id",
-    "registration_channel_id",
-    "leaderboard_channel_id",
-    "send_track_channel_id",
-    "moderation_role_id",
-    "domme_role_id",
-    "submissive_role_id",
-    "event_ban_role_id",
-})
-
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -193,11 +182,6 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_event_sends_sub
             ON event_sends(sub_name);
-
-            CREATE TABLE IF NOT EXISTS bot_config (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
             """
         )
         await self.connection.commit()
@@ -613,42 +597,6 @@ class Database:
             (domme_user_id,),
         ) as cursor:
             return await cursor.fetchone() is not None
-
-    async def save_bot_config_ids(self, **kwargs: int) -> None:
-        """Persist integer config IDs into bot_config. Only known keys are written."""
-        for key, value in kwargs.items():
-            if key not in _CONFIG_INT_KEYS:
-                continue
-            if not value:
-                continue
-            async with self.connection.execute(
-                """
-                INSERT INTO bot_config (key, value) VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
-                (key, str(value)),
-            ):
-                pass
-        await self.connection.commit()
-
-    async def get_bot_config_ids(self) -> dict[str, int]:
-        """Return all stored integer config IDs."""
-        # _CONFIG_INT_KEYS contains only known safe string literals — this is
-        # safe to interpolate into the query as placeholder counts.
-        async with self.connection.execute(
-            "SELECT key, value FROM bot_config WHERE key IN ({})".format(
-                ",".join("?" * len(_CONFIG_INT_KEYS))
-            ),
-            tuple(_CONFIG_INT_KEYS),
-        ) as cursor:
-            rows = await cursor.fetchall()
-        result: dict[str, int] = {}
-        for row in rows:
-            try:
-                result[row["key"]] = int(row["value"])
-            except (ValueError, TypeError):
-                pass
-        return result
 
 
 def _utc_now() -> str:

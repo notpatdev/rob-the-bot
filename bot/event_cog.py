@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import random
-from dataclasses import replace
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -30,7 +29,6 @@ from bot.event_views import (
     EventEndConfirmView,
     EventStartPromptView,
     EventStatusView,
-    ImportPromptView,
     SubLeaderboardView,
     SubSignupModal,
     UpdateNotificationView,
@@ -62,15 +60,6 @@ class RobEventCog(commands.Cog):
         self._synced_on_ready = False
         self.status_loop.start()
         self.event_lifecycle_loop.start()
-
-    # ──────────────────────────────── lifecycle ────────────────────────────────
-
-    async def restore_runtime(self) -> None:
-        """Load persisted config IDs from the database and apply them."""
-        stored = await self.database.get_bot_config_ids()
-        if stored:
-            self.config = replace(self.config, **stored)
-            self.bot.config = self.config  # keep bot.config in sync
 
     def cog_unload(self) -> None:
         self.status_loop.cancel()
@@ -194,77 +183,6 @@ class RobEventCog(commands.Cog):
         if signup_type == "sub" and self._member_has_role(member, self.config.domme_role_id):
             return "You can't sign up as a Sub while you have the Domme role."
         return None
-
-    # ──────────────────────────────── !import id ──────────────────────────────
-
-    @commands.command(name="import")
-    async def import_ids(self, ctx: commands.Context[commands.Bot]) -> None:
-        """DEV: open a form to set channel and role IDs."""
-        if ctx.guild is None or not isinstance(ctx.author, discord.Member):
-            await ctx.reply("This command only works in a server channel.", mention_author=False)
-            return
-
-        # Gate on bot application owner only
-        try:
-            app = await self.bot.application_info()
-            owner_id = app.owner.id if app.owner else None
-        except discord.HTTPException:
-            owner_id = None
-
-        if owner_id is None or ctx.author.id != owner_id:
-            # Allow server admins as a fallback if owner is not present
-            if not ctx.author.guild_permissions.administrator:
-                await ctx.reply("Only the bot owner or a server administrator can use this command.", mention_author=False)
-                return
-
-        guild_id = ctx.guild.id
-        view = ImportPromptView(self, owner_id=ctx.author.id, guild_id=guild_id)
-        await ctx.reply(view=view, mention_author=False)
-
-    async def save_config_ids(
-        self,
-        interaction: discord.Interaction,
-        *,
-        guild_id: int,
-        registration_channel_id: int,
-        leaderboard_channel_id: int,
-        send_track_channel_id: int,
-        moderation_role_id: int,
-        domme_role_id: int,
-        submissive_role_id: int,
-        event_ban_role_id: int,
-    ) -> None:
-        await self.database.save_bot_config_ids(
-            guild_id=guild_id,
-            registration_channel_id=registration_channel_id,
-            leaderboard_channel_id=leaderboard_channel_id,
-            send_track_channel_id=send_track_channel_id,
-            moderation_role_id=moderation_role_id,
-            domme_role_id=domme_role_id,
-            submissive_role_id=submissive_role_id,
-            event_ban_role_id=event_ban_role_id,
-        )
-        self.config = replace(
-            self.config,
-            guild_id=guild_id or self.config.guild_id,
-            registration_channel_id=registration_channel_id or self.config.registration_channel_id,
-            leaderboard_channel_id=leaderboard_channel_id or self.config.leaderboard_channel_id,
-            send_track_channel_id=send_track_channel_id or self.config.send_track_channel_id,
-            moderation_role_id=moderation_role_id or self.config.moderation_role_id,
-            domme_role_id=domme_role_id or self.config.domme_role_id,
-            submissive_role_id=submissive_role_id or self.config.submissive_role_id,
-            event_ban_role_id=event_ban_role_id or self.config.event_ban_role_id,
-        )
-        self.bot.config = self.config
-        await interaction.response.send_message(
-            view=_simple_view(
-                "## ✅ IDs Saved\n\n"
-                "Channel and role IDs have been saved to the database and are "
-                "active immediately. They will also be loaded on the next restart.",
-                colour=GREEN,
-            ),
-            ephemeral=True,
-        )
 
     # ──────────────────────────────── !event group ────────────────────────────
 
@@ -518,7 +436,11 @@ class RobEventCog(commands.Cog):
 
         # Sub leaderboard: top 20
         sub_rows_db = await self.database.get_event_sub_totals(limit=20, offset=0)
-        sub_rows = [(f"<@{r.user_id}>", r.total_usd, r.send_count) for r in sub_rows_db]
+        sub_rows: list[tuple[str | None, int, float, int]] = []
+        for r in sub_rows_db:
+            member = guild.get_member(r.user_id)
+            display = member.display_name if member else None
+            sub_rows.append((display, r.user_id, r.total_usd, r.send_count))
         unclaimed = await self.database.get_event_unclaimed_total()
 
         # Domme totals: all
@@ -529,6 +451,7 @@ class RobEventCog(commands.Cog):
             message_key="event:sub_leaderboard",
             channel=channel,
             view=SubLeaderboardView(
+                cog=self,
                 event_name=self.config.event_name,
                 state=state,
                 rows=sub_rows,
