@@ -633,6 +633,8 @@ class Database:
 
     async def get_bot_config_ids(self) -> dict[str, int]:
         """Return all stored integer config IDs."""
+        # _CONFIG_INT_KEYS contains only known safe string literals — this is
+        # safe to interpolate into the query as placeholder counts.
         async with self.connection.execute(
             "SELECT key, value FROM bot_config WHERE key IN ({})".format(
                 ",".join("?" * len(_CONFIG_INT_KEYS))

@@ -152,7 +152,8 @@ success "Environment file written"
 step "6/7  Deploy user SSH key and sudo"
 install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_GROUP}" "${DEPLOY_HOME}/.ssh"
 
-# Generate a dedicated Ed25519 deploy key (no passphrase — CI/CD use only)
+# Generate a dedicated Ed25519 deploy key (no passphrase — intended for
+# automated CI/CD use only; the private key must be kept secret).
 DEPLOY_KEY_FILE="${DEPLOY_HOME}/.ssh/rob_deploy_ed25519"
 if [[ ! -f "${DEPLOY_KEY_FILE}" ]]; then
   ssh-keygen -q -t ed25519 -f "${DEPLOY_KEY_FILE}" -N "" -C "rob-the-bot-deploy"
