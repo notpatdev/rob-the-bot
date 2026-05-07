@@ -105,29 +105,13 @@ class LeaderboardView(discord.ui.LayoutView):
             )
             register_button.callback = self._open_register_modal
 
-        pre_rows_sections: list[discord.ui.Item] = []
-        post_rows_sections: list[discord.ui.Item] = []
-        if register_button is not None and register_section_text:
-            if register_kind == "domme":
-                pre_rows_sections = [separator(), action_section(register_section_text, register_button)]
-            elif register_kind == "sub":
-                display_unclaimed_total = unclaimed_total if unclaimed_total is not None else "$0.00"
-                post_rows_sections = [
-                    separator(),
-                    action_section(
-                        "### Unclaimed Sends\n\n"
-                        f"Tracked and waiting to be claimed: **{display_unclaimed_total}**\n\n"
-                        f"{register_section_text}",
-                        register_button,
-                    ),
-                    text_block(
-                        _render_unclaimed_rows(unclaimed_rows or [])
-                        if unclaimed_rows
-                        else "No named loose sends right now. Rob is almost disappointed."
-                    ),
-                ]
-            else:
-                raise ValueError(f"Unsupported leaderboard register kind: {register_kind}")
+        pre_rows_sections, post_rows_sections = self._build_register_sections(
+            register_button=register_button,
+            register_kind=register_kind,
+            register_section_text=register_section_text,
+            unclaimed_rows=unclaimed_rows,
+            unclaimed_total=unclaimed_total,
+        )
 
         sections: list[discord.ui.Item] = [
             separator(),
@@ -150,6 +134,37 @@ class LeaderboardView(discord.ui.LayoutView):
                 accent_color=accent_color,
             )
         )
+
+    def _build_register_sections(
+        self,
+        *,
+        register_button: discord.ui.Button | None,
+        register_kind: str | None,
+        register_section_text: str | None,
+        unclaimed_rows: list[tuple[str, float, int]] | None,
+        unclaimed_total: str | None,
+    ) -> tuple[list[discord.ui.Item], list[discord.ui.Item]]:
+        if register_button is None or not register_section_text:
+            return [], []
+        if register_kind == "domme":
+            return [separator(), action_section(register_section_text, register_button)], []
+        if register_kind == "sub":
+            display_unclaimed_total = unclaimed_total if unclaimed_total is not None else "$0.00"
+            return [], [
+                separator(),
+                action_section(
+                    "### Unclaimed Sends\n\n"
+                    f"Tracked and waiting to be claimed: **{display_unclaimed_total}**\n\n"
+                    f"{register_section_text}",
+                    register_button,
+                ),
+                text_block(
+                    _render_unclaimed_rows(unclaimed_rows or [])
+                    if unclaimed_rows
+                    else "No named loose sends right now. Rob is almost disappointed."
+                ),
+            ]
+        raise ValueError(f"Unsupported leaderboard register kind: {register_kind}")
 
     async def _open_register_modal(self, interaction: discord.Interaction) -> None:
         if self.cog is None or self.register_kind is None:
