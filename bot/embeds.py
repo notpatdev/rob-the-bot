@@ -548,7 +548,8 @@ def domme_setup_details_container(
             f"## {messages.DOMME_SETUP_DETAILS_TITLE}\n{messages.DOMME_SETUP_DETAILS_DESCRIPTION}"
         ),
         discord.ui.TextDisplay(f"**Pronouns**\n{_profile_value(pronouns)}"),
-        discord.ui.TextDisplay(f"**Age:** {_profile_value(age)} | **Tribute Fee Price:** {_profile_value(tribute_price)}"),
+        discord.ui.TextDisplay(f"**Age**\n{_profile_value(age)}"),
+        discord.ui.TextDisplay(f"**Tribute Fee Price**\n{_profile_value(tribute_price)}"),
         discord.ui.TextDisplay(f"**Kinks**\n{_profile_value(kinks)}"),
         discord.ui.TextDisplay(f"**Limits**\n{_profile_value(limits)}"),
         discord.ui.TextDisplay(_butler_footer("Step 2/4")),
@@ -582,7 +583,7 @@ def domme_setup_links_container(
         if (line := _smart_link_line(link))
     ]
     items.append(discord.ui.TextDisplay(
-        f"**Payment Links**\n{chr(10).join(pay_lines) if pay_lines else 'Not provided'}"
+        f"**Payment Links**\n{"\n".join(pay_lines) if pay_lines else 'Not provided'}"
     ))
     # Content links — smart-detected labels
     content_lines = [
@@ -590,7 +591,7 @@ def domme_setup_links_container(
         if (line := _smart_link_line(link))
     ]
     items.append(discord.ui.TextDisplay(
-        f"**Content Links**\n{chr(10).join(content_lines) if content_lines else 'Not provided'}"
+        f"**Content Links**\n{"\n".join(content_lines) if content_lines else 'Not provided'}"
     ))
     items.append(discord.ui.TextDisplay(_butler_footer("Step 3/4")))
     return discord.ui.Container(*items, accent_color=PURPLE)
@@ -667,16 +668,15 @@ def domme_setup_review_container(
     if _has_value(limits):
         items.append(discord.ui.TextDisplay(f"**Limits**\n{limits}"))
     # Throne + tribute
-    items.append(discord.ui.TextDisplay(
-        f"**Throne:** {_profile_value(throne)} | **Tribute Link:** {_profile_value(tribute_link)}"
-    ))
+    items.append(discord.ui.TextDisplay(f"**Throne**\n{_profile_value(throne)}"))
+    items.append(discord.ui.TextDisplay(f"**Tribute Link**\n{_profile_value(tribute_link)}"))
     # Payment links
     pay_lines = [
         line for link in (payment_link1, payment_link2, payment_link3, payment_link4)
         if (line := _smart_link_line(link))
     ]
     items.append(discord.ui.TextDisplay(
-        f"**Payment Links**\n{chr(10).join(pay_lines) if pay_lines else 'None'}"
+        f"**Payment Links**\n{"\n".join(pay_lines) if pay_lines else 'None'}"
     ))
     # Content links
     content_lines = [
@@ -684,15 +684,14 @@ def domme_setup_review_container(
         if (line := _smart_link_line(link))
     ]
     items.append(discord.ui.TextDisplay(
-        f"**Content Links**\n{chr(10).join(content_lines) if content_lines else 'None'}"
+        f"**Content Links**\n{"\n".join(content_lines) if content_lines else 'None'}"
     ))
     color_label = next(
         (lbl for val, _emoji, lbl in PROFILE_COLOR_PRESETS if val == profile_color),
         f"#{profile_color:06X}",
     )
-    items.append(discord.ui.TextDisplay(
-        f"**Throne Tracking:** {_feature_value(throne_tracking_enabled)} | **Profile Color:** {color_label}"
-    ))
+    items.append(discord.ui.TextDisplay(f"**Throne Tracking**\n{_feature_value(throne_tracking_enabled)}"))
+    items.append(discord.ui.TextDisplay(f"**Profile Color**\n{color_label}"))
     items.append(discord.ui.TextDisplay(_butler_footer("Ready to save")))
     return discord.ui.Container(*items, accent_color=discord.Color(profile_color))
 
@@ -1025,7 +1024,8 @@ def sub_setup_details_container(
             f"## {messages.SUB_SETUP_DETAILS_TITLE}\n{messages.SUB_SETUP_DETAILS_DESCRIPTION}"
         ),
         discord.ui.TextDisplay(f"**Name**\n{_profile_value(name)}"),
-        discord.ui.TextDisplay(f"**Pronouns:** {_profile_value(pronouns)} | **Age:** {_profile_value(age)}"),
+        discord.ui.TextDisplay(f"**Pronouns**\n{_profile_value(pronouns)}"),
+        discord.ui.TextDisplay(f"**Age**\n{_profile_value(age)}"),
         discord.ui.TextDisplay(_butler_footer("Step 2/6")),
     ]
     return discord.ui.Container(*items, accent_color=SOFT_DARK)
@@ -1099,9 +1099,8 @@ def sub_setup_review_container(
             f"**Pronouns:** {_profile_value(pronouns)}\n"
             f"**Age:** {_profile_value(age)}"
         ),
-        discord.ui.TextDisplay(
-            f"**Throne Name:** {_profile_value(throne_name)} | **Profile Colour:** {color_label}"
-        ),
+        discord.ui.TextDisplay(f"**Throne Name**\n{_profile_value(throne_name)}"),
+        discord.ui.TextDisplay(f"**Profile Colour**\n{color_label}"),
         discord.ui.TextDisplay(f"**Owned By**\n{owned_by_label}"),
     ]
     if _has_value(kinks):
