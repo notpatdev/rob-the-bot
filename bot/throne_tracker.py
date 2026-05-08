@@ -22,7 +22,7 @@ from bot.database import Database, EventDommeRegistration
 from bot.event_views import SendNotificationView, ThroneRefreshView, format_money, format_timestamp
 from bot.ui.components import action_section, make_container, separator, simple_view, text_block
 from bot.throne_scraper import fetch_recent_sends_with_status, normalize_throne_url
-from bot.utils import has_admin_command_permissions
+from bot.utils import has_admin_command_permissions, normalize_sender_name
 
 log = logging.getLogger(__name__)
 
@@ -693,7 +693,7 @@ class ThroneTrackerCog(commands.Cog):
         for item in new_items:
             send_id = await self.database.log_event_send(
                 domme_user_id=profile.user_id,
-                sub_name=item.sender_name,
+                sub_name=normalize_sender_name(item.sender_name),
                 amount_usd=item.amount_usd if item.amount_usd is not None else 0.0,
                 item_name=item.item_name,
                 item_image_url=item.item_image_url,
