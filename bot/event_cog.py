@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +26,12 @@ from bot.event_views import (
     UpdateNotificationView,
     format_money,
 )
-from bot.throne_scraper import normalize_throne_registration_input, resolve_creator_id
+from bot.throne_scraper import (
+    has_overlay_data,
+    normalize_throne_registration_input,
+    resolve_creator_id,
+    resolve_creator_info,
+)
 from bot.ui.cards import info_view, success_view
 from bot.ui.copy import STATUS_LINES
 from bot.utils import has_admin_command_permissions
@@ -420,28 +426,116 @@ class RobEventCog(commands.Cog):
             return
 
         http = await self._get_http()
-        creator = await resolve_creator_id(
+
+        # Resolve full creator info (id + handle + hideOwnPurchases).
+        creator_info = await resolve_creator_info(
             normalized,
             http=http,
             timeout_seconds=self.config.throne_http_timeout_seconds,
         )
-        if creator is None:
+        if creator_info is None:
             await interaction.response.send_message(
                 "Rob squinted at that link and found nothing. Check it and try again.",
                 ephemeral=True,
             )
             return
 
+        # Probe overlays to detect Stream Alerts connectivity.
+        overlay_exists = await has_overlay_data(
+            creator_info.creator_id,
+            http=http,
+            timeout_seconds=self.config.throne_http_timeout_seconds,
+        )
+
+        # Determine guild_id (may be None in DMs, but signup requires a guild).
+        guild_id = str(interaction.guild_id) if interaction.guild_id else "0"
+        discord_user_id = str(interaction.user.id)
+
+        # Preserve existing webhook_secret if the creator is already registered.
+        existing = await self.database.get_throne_creator_by_handle(
+            guild_id=guild_id,
+            throne_handle=creator_info.throne_handle,
+        )
+        if existing is not None and existing.webhook_secret:
+            webhook_secret = existing.webhook_secret
+        else:
+            webhook_secret = secrets.token_urlsafe(32)
+
+        # Determine tracking mode: keep 'webhook' if already connected, else
+        # 'overlay' if overlays exist, else 'disabled'.
+        if existing is not None and existing.tracking_mode == "webhook":
+            tracking_mode = "webhook"
+        elif overlay_exists:
+            tracking_mode = "overlay"
+        else:
+            tracking_mode = "disabled"
+
+        now_str = datetime.now(timezone.utc).isoformat()
+        throne_creator = await self.database.upsert_throne_creator(
+            guild_id=guild_id,
+            discord_user_id=discord_user_id,
+            throne_handle=creator_info.throne_handle,
+            throne_creator_id=creator_info.creator_id,
+            hide_own_purchases=creator_info.hide_own_purchases,
+            tracking_mode=tracking_mode,
+            webhook_secret=webhook_secret,
+            overlay_detected=overlay_exists,
+            last_overlay_check_at=now_str,
+        )
+
+        # Save to event_dommes as before (keeps leaderboard / existing flows working).
         await self.database.save_event_domme(user_id=interaction.user.id, throne_url=normalized)
         await self.sync_leaderboard_channel()
+
+        # Build the webhook URL if the base URL is configured.
+        webhook_url: str | None = None
+        base_url = self.config.throne_webhook_base_url
+        if base_url:
+            base_url = base_url.rstrip("/")
+            webhook_url = f"{base_url}/throne/webhook/{creator_info.creator_id}/{throne_creator.webhook_secret}"
+
+        # Compose ephemeral reply.
+        mode_labels = {
+            "webhook": "✅ Webhook (real-time)",
+            "overlay": "🔔 Stream Alerts overlay (polled)",
+            "disabled": "⚠️ Not connected — see setup instructions below",
+        }
+        mode_label = mode_labels.get(tracking_mode, tracking_mode)
+
+        lines: list[str] = [
+            f"✅ Linked **{creator_info.throne_handle}**.",
+            f"**Tracking mode:** {mode_label}",
+        ]
+
+        if tracking_mode == "disabled":
+            lines.append(
+                "\nNeither webhooks nor Stream Alerts are detected. "
+                "To enable tracking, either:"
+            )
+            if webhook_url:
+                lines.append(
+                    f"• **Webhook (recommended):** Go to Throne → Settings → Integrations → Webhooks "
+                    f"and add:\n`{webhook_url}`"
+                )
+            else:
+                lines.append(
+                    "• **Webhook (recommended):** Ask the server admin for the webhook URL, "
+                    "then go to Throne → Settings → Integrations → Webhooks."
+                )
+            lines.append(
+                "• **Stream Alerts:** Enable Stream Alerts in Throne and Rob will detect them automatically."
+            )
+        elif tracking_mode == "overlay":
+            if webhook_url:
+                lines.append(
+                    f"\n💡 Upgrade to real-time webhooks: go to Throne → Settings → Integrations → Webhooks "
+                    f"and add:\n`{webhook_url}`"
+                )
+        elif tracking_mode == "webhook" and webhook_url:
+            lines.append(f"\n**Webhook URL:** `{webhook_url}`")
+
         await interaction.response.send_message(
-            view=success_view(
-                "Handled.",
-                (
-                    f"Tracking **{normalized}** now.\n\n"
-                    "Live sends will land in the tracker and on the board."
-                ),
-            ),
+            view=success_view("Handled.", "\n".join(lines)),
             ephemeral=True,
         )
 
