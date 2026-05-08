@@ -42,6 +42,16 @@ def format_timestamp(value: str | None) -> str:
     return f"<t:{timestamp}:R> / <t:{timestamp}:f>"
 
 
+def format_relative_timestamp(value: str | None) -> str:
+    if not value:
+        return "Never"
+    try:
+        timestamp = int(datetime.fromisoformat(value).timestamp())
+    except ValueError:
+        return value
+    return f"<t:{timestamp}:R>"
+
+
 def _send_suffix(count: int) -> str:
     return "send" if count == 1 else "sends"
 

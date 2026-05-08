@@ -7,7 +7,7 @@ from bot.config import BotConfig
 
 
 _ROB_TEST_SEND_ALIAS = "Rob Test Send"
-_ROB_TEST_SEND_SOURCE_NAMES = {"marie_123"}
+_ROB_TEST_SEND_SOURCE_NAME = "marie_123".casefold()
 
 
 def has_moderation_role(member: discord.Member, config: BotConfig) -> bool:
@@ -34,6 +34,6 @@ def normalize_sender_name(sender_name: str | None) -> str | None:
     cleaned = sender_name.strip()
     if not cleaned:
         return sender_name
-    if cleaned.casefold() in _ROB_TEST_SEND_SOURCE_NAMES:
+    if cleaned.casefold() == _ROB_TEST_SEND_SOURCE_NAME:
         return _ROB_TEST_SEND_ALIAS
     return sender_name

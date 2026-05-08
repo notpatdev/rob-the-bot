@@ -19,7 +19,13 @@ from discord.ext import commands, tasks
 
 from bot.config import BotConfig
 from bot.database import Database, EventDommeRegistration
-from bot.event_views import SendNotificationView, ThroneRefreshView, format_money, format_timestamp
+from bot.event_views import (
+    SendNotificationView,
+    ThroneRefreshView,
+    format_money,
+    format_relative_timestamp,
+    format_timestamp,
+)
 from bot.ui.components import action_section, make_container, separator, simple_view, text_block
 from bot.throne_scraper import fetch_recent_sends_with_status, normalize_throne_url
 from bot.utils import has_admin_command_permissions, normalize_sender_name
@@ -331,7 +337,7 @@ class ThroneTrackerCog(commands.Cog):
                 user_label = await self._member_display_label(ctx.guild, int(creator.discord_user_id))
                 status = "🟢 Active" if creator.tracking_mode == "webhook" else "⚪ Disabled"
                 if creator.last_successful_event_at:
-                    status = f"{status} · last event {format_timestamp(creator.last_successful_event_at).split(' / ')[0]}"
+                    status = f"{status} · last event {format_relative_timestamp(creator.last_successful_event_at)}"
                 if creator_index:
                     sections.append(separator())
                 sections.append(
