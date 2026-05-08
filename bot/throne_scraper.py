@@ -6,19 +6,10 @@ resolve a creator id from a Throne username. Overlay documents contain the same
 payload Throne uses for stream alerts, including ``overlayId``, gifter name,
 item name, item image, and timestamp.
 
-Throne profiles (throne.com / throne.gifts) are server-rendered Next.js pages.
-The activity / supporters feed is present in two forms:
-
-1. As JSON inside a ``<script id="__NEXT_DATA__">`` tag — preferred because it
-   is structured and reasonably stable across cosmetic UI changes.
-2. As rendered HTML in the page body — used as a fallback if the JSON shape
-   changes.
-
-The public field names used by Throne can change without notice, so the
-parser walks the JSON looking for any object that *looks* like a "send" and
-extracts the fields it needs by trying a list of candidate keys. Anything
-that fails to parse is skipped rather than raising — we'd rather return a
-shorter list than crash the polling loop.
+The page-scraping fallback (``__NEXT_DATA__`` / HTML) is retained in this module
+but is no longer called by the polling loop. Throne migrated the main profile
+page away from Next.js, so ``__NEXT_DATA__`` no longer appears there. The code
+is kept for reference and potential future use.
 
 This module is pure-functional and easy to unit-test against saved fixtures.
 """
@@ -53,6 +44,14 @@ class ScrapedSend:
     item_name: str | None
     item_image_url: str | None
     sent_at: str  # ISO-8601 UTC
+
+
+@dataclass(frozen=True)
+class CreatorInfo:
+    """Resolved Throne creator metadata."""
+    creator_id: str
+    throne_handle: str
+    hide_own_purchases: bool | None  # None = unknown (e.g. resolved from stream-alert URL)
 
 
 @dataclass(frozen=True)
@@ -193,6 +192,47 @@ async def resolve_creator_id(
         http=http,
         timeout_seconds=timeout_seconds,
     )
+
+
+async def resolve_creator_info(
+    throne_reference: str,
+    *,
+    http: aiohttp.ClientSession,
+    timeout_seconds: float = 10.0,
+) -> CreatorInfo | None:
+    """Resolve Throne creator metadata (id, handle, hideOwnPurchases).
+
+    Returns ``None`` if the reference cannot be resolved to a Throne creator.
+    """
+    normalized = normalize_throne_registration_input(throne_reference)
+    if normalized is None:
+        return None
+
+    # Fast path: stream-alert URLs embed the creator id directly.
+    direct_creator_id = _creator_id_from_stream_alert_url(normalized)
+    if direct_creator_id:
+        # Stream-alert URLs don't carry the handle — resolve via Firestore.
+        return await _resolve_creator_info_by_id(
+            direct_creator_id, http=http, timeout_seconds=timeout_seconds
+        )
+
+    username = _username_from_throne_url(normalized)
+    if username is None:
+        return None
+    return await _resolve_creator_info_by_username(
+        username, http=http, timeout_seconds=timeout_seconds
+    )
+
+
+async def has_overlay_data(
+    creator_id: str,
+    *,
+    http: aiohttp.ClientSession,
+    timeout_seconds: float = 10.0,
+) -> bool:
+    """Return True if the creator has any overlay documents in Firestore."""
+    documents = await _query_overlay_documents(creator_id, http=http, timeout_seconds=timeout_seconds)
+    return bool(documents)
 
 
 async def fetch_recent_sends(
@@ -444,6 +484,93 @@ async def _resolve_creator_id(
             return raw_id
     log.info("No Throne creator found for username %s.", username)
     return None
+
+
+async def _resolve_creator_info_by_username(
+    username: str,
+    *,
+    http: aiohttp.ClientSession,
+    timeout_seconds: float,
+) -> CreatorInfo | None:
+    """Fetch creator info (id, handle, hideOwnPurchases) by Throne username."""
+    payload = {
+        "structuredQuery": {
+            "from": [{"collectionId": "creators"}],
+            "where": {
+                "fieldFilter": {
+                    "field": {"fieldPath": "username"},
+                    "op": "EQUAL",
+                    "value": {"stringValue": username},
+                }
+            },
+            "limit": 1,
+        }
+    }
+    rows = await _run_firestore_query(payload, http=http, timeout_seconds=timeout_seconds)
+    if rows is None:
+        return None
+    for row in rows:
+        document = row.get("document")
+        if not isinstance(document, dict):
+            continue
+        fields = _firestore_fields_to_python(document.get("fields"))
+        raw_id = fields.get("_id") or _document_id(document)
+        if not isinstance(raw_id, str) or not raw_id:
+            continue
+        handle = fields.get("username") or username
+        if not isinstance(handle, str):
+            handle = username
+        raw_hop = fields.get("hideOwnPurchases")
+        hide_own_purchases: bool | None = bool(raw_hop) if raw_hop is not None else None
+        return CreatorInfo(
+            creator_id=raw_id,
+            throne_handle=handle,
+            hide_own_purchases=hide_own_purchases,
+        )
+    log.info("No Throne creator found for username %s.", username)
+    return None
+
+
+async def _resolve_creator_info_by_id(
+    creator_id: str,
+    *,
+    http: aiohttp.ClientSession,
+    timeout_seconds: float,
+) -> CreatorInfo | None:
+    """Fetch creator info (handle, hideOwnPurchases) for a known creator id."""
+    payload = {
+        "structuredQuery": {
+            "from": [{"collectionId": "creators"}],
+            "where": {
+                "fieldFilter": {
+                    "field": {"fieldPath": "_id"},
+                    "op": "EQUAL",
+                    "value": {"stringValue": creator_id},
+                }
+            },
+            "limit": 1,
+        }
+    }
+    rows = await _run_firestore_query(payload, http=http, timeout_seconds=timeout_seconds)
+    if rows is None:
+        return None
+    for row in rows:
+        document = row.get("document")
+        if not isinstance(document, dict):
+            continue
+        fields = _firestore_fields_to_python(document.get("fields"))
+        handle = fields.get("username")
+        if not isinstance(handle, str) or not handle:
+            handle = creator_id
+        raw_hop = fields.get("hideOwnPurchases")
+        hide_own_purchases: bool | None = bool(raw_hop) if raw_hop is not None else None
+        return CreatorInfo(
+            creator_id=creator_id,
+            throne_handle=handle,
+            hide_own_purchases=hide_own_purchases,
+        )
+    # Creator id is valid (came from stream-alert URL) but not in Firestore.
+    return CreatorInfo(creator_id=creator_id, throne_handle=creator_id, hide_own_purchases=None)
 
 
 async def _query_overlay_documents(

@@ -11,6 +11,7 @@ from bot.config import BotConfig, load_config
 from bot.database import Database
 from bot.event_cog import RobEventCog
 from bot.throne_tracker import ThroneTrackerCog
+from bot.webhook_server import ThroneWebhookServer
 
 
 class RobBot(commands.Bot):
@@ -33,6 +34,7 @@ class RobBot(commands.Bot):
         )
         self.config = config
         self.database = database
+        self._webhook_server: ThroneWebhookServer | None = None
 
     async def setup_hook(self) -> None:
         await self.database.initialize()
@@ -53,8 +55,14 @@ class RobBot(commands.Bot):
 
     async def on_ready(self) -> None:
         logging.info("%s is online as %s.", self.config.bot_name, self.user)
+        if self._webhook_server is None:
+            self._webhook_server = ThroneWebhookServer(self, self.config, self.database)
+            await self._webhook_server.start()
 
     async def close(self) -> None:
+        if self._webhook_server is not None:
+            await self._webhook_server.stop()
+            self._webhook_server = None
         await self.database.close()
         await super().close()
 

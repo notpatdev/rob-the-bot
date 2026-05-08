@@ -8,6 +8,44 @@ import aiosqlite
 
 
 @dataclass(frozen=True)
+class ThroneCreator:
+    id: int
+    guild_id: str
+    discord_user_id: str
+    throne_handle: str
+    throne_creator_id: str
+    hide_own_purchases: bool | None
+    tracking_mode: str
+    webhook_secret: str
+    webhook_connected_at: str | None
+    overlay_detected: bool
+    last_overlay_check_at: str | None
+    last_successful_event_at: str | None
+    created_at: str
+    updated_at: str
+
+    @classmethod
+    def from_row(cls, row: aiosqlite.Row) -> "ThroneCreator":
+        keys = row.keys()
+        return cls(
+            id=int(row["id"]),
+            guild_id=row["guild_id"],
+            discord_user_id=row["discord_user_id"],
+            throne_handle=row["throne_handle"],
+            throne_creator_id=row["throne_creator_id"],
+            hide_own_purchases=bool(row["hide_own_purchases"]) if row["hide_own_purchases"] is not None else None,
+            tracking_mode=row["tracking_mode"],
+            webhook_secret=row["webhook_secret"],
+            webhook_connected_at=row["webhook_connected_at"],
+            overlay_detected=bool(row["overlay_detected"]),
+            last_overlay_check_at=row["last_overlay_check_at"] if "last_overlay_check_at" in keys else None,
+            last_successful_event_at=row["last_successful_event_at"] if "last_successful_event_at" in keys else None,
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+@dataclass(frozen=True)
 class EventSubTotalRow:
     user_id: int
     total_usd: float
@@ -224,6 +262,27 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_event_sends_event_key
             ON event_sends(event_key);
 
+            CREATE TABLE IF NOT EXISTS throne_creators (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                discord_user_id TEXT NOT NULL,
+                throne_handle TEXT NOT NULL,
+                throne_creator_id TEXT NOT NULL,
+                hide_own_purchases INTEGER,
+                tracking_mode TEXT NOT NULL DEFAULT 'disabled',
+                webhook_secret TEXT NOT NULL,
+                webhook_connected_at TEXT,
+                overlay_detected INTEGER NOT NULL DEFAULT 0,
+                last_overlay_check_at TEXT,
+                last_successful_event_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(guild_id, throne_handle)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_throne_creators_creator_id
+            ON throne_creators(throne_creator_id);
+
             CREATE TABLE IF NOT EXISTS bot_config (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -237,12 +296,33 @@ class Database:
         await self._ensure_column("event_state", "event_name", "TEXT")
         await self._ensure_column("event_state", "report_posted_at", "TEXT")
         await self._ensure_column("event_sends", "event_key", "TEXT")
+        await self._ensure_column("event_sends", "event_id", "TEXT")
+        await self._ensure_column("event_sends", "fallback_event_hash", "TEXT")
+        await self._ensure_column("event_sends", "source", "TEXT")
         await self._ensure_column("bot_config", "value", "TEXT NOT NULL", allow_existing=True)
         await self.connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_event_sends_event_key
             ON event_sends(event_key)
             """
+        )
+        await self.connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_event_sends_event_id
+            ON event_sends(event_id)
+            WHERE event_id IS NOT NULL
+            """
+        )
+        await self.connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_event_sends_fallback_hash
+            ON event_sends(fallback_event_hash)
+            WHERE fallback_event_hash IS NOT NULL
+            """
+        )
+        # Backfill source = 'overlay' for rows inserted before this column existed.
+        await self.connection.execute(
+            "UPDATE event_sends SET source = 'overlay' WHERE source IS NULL"
         )
 
     async def _column_names(self, table_name: str) -> set[str]:
@@ -711,60 +791,64 @@ class Database:
         item_image_url: str | None,
         logged_by: int,
         external_id: str | None = None,
+        event_id: str | None = None,
+        fallback_event_hash: str | None = None,
+        source: str | None = None,
         is_private: bool = False,
         seeded: bool = False,
         sent_at: str | None = None,
         event_key: str | None = None,
     ) -> int | None:
-        if external_id:
-            async with self.connection.execute(
-                "SELECT id FROM event_sends WHERE external_id = ?",
-                (external_id,),
-            ) as cursor:
-                existing = await cursor.fetchone()
-            if existing is not None:
-                return None
-
         claimed_sub_user_id: int | None = None
         if sub_name:
             sub = await self.get_event_sub_by_name(sub_name=sub_name)
             if sub is not None:
                 claimed_sub_user_id = sub.user_id
 
-        async with self.connection.execute(
-            """
-            INSERT INTO event_sends (
-                domme_user_id,
-                sub_name,
-                claimed_sub_user_id,
-                amount_usd,
-                item_name,
-                item_image_url,
-                logged_by,
-                sent_at,
-                external_id,
-                is_private,
-                seeded,
-                event_key
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                domme_user_id,
-                sub_name,
-                claimed_sub_user_id,
-                amount_usd,
-                item_name,
-                item_image_url,
-                logged_by,
-                sent_at or _utc_now(),
-                external_id,
-                int(bool(is_private)),
-                int(bool(seeded)),
-                event_key,
-            ),
-        ) as cursor:
-            send_id = int(cursor.lastrowid)
+        try:
+            async with self.connection.execute(
+                """
+                INSERT INTO event_sends (
+                    domme_user_id,
+                    sub_name,
+                    claimed_sub_user_id,
+                    amount_usd,
+                    item_name,
+                    item_image_url,
+                    logged_by,
+                    sent_at,
+                    external_id,
+                    event_id,
+                    fallback_event_hash,
+                    source,
+                    is_private,
+                    seeded,
+                    event_key
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    domme_user_id,
+                    sub_name,
+                    claimed_sub_user_id,
+                    amount_usd,
+                    item_name,
+                    item_image_url,
+                    logged_by,
+                    sent_at or _utc_now(),
+                    external_id,
+                    event_id,
+                    fallback_event_hash,
+                    source,
+                    int(bool(is_private)),
+                    int(bool(seeded)),
+                    event_key,
+                ),
+            ) as cursor:
+                send_id = int(cursor.lastrowid)
+        except aiosqlite.IntegrityError:
+            # Duplicate detected via unique index (external_id, event_id, or fallback_event_hash).
+            return None
         await self.connection.commit()
         return send_id
 
@@ -836,3 +920,124 @@ class Database:
         if event_key is None:
             return "", ()
         return "AND event_key = ?", (event_key,)
+
+    # -------------------------------------------------------------------------
+    # throne_creators CRUD
+    # -------------------------------------------------------------------------
+
+    async def upsert_throne_creator(
+        self,
+        *,
+        guild_id: str,
+        discord_user_id: str,
+        throne_handle: str,
+        throne_creator_id: str,
+        hide_own_purchases: bool | None,
+        tracking_mode: str,
+        webhook_secret: str,
+        overlay_detected: bool,
+        last_overlay_check_at: str | None = None,
+    ) -> ThroneCreator:
+        now = _utc_now()
+        async with self.connection.execute(
+            """
+            INSERT INTO throne_creators (
+                guild_id,
+                discord_user_id,
+                throne_handle,
+                throne_creator_id,
+                hide_own_purchases,
+                tracking_mode,
+                webhook_secret,
+                overlay_detected,
+                last_overlay_check_at,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, throne_handle) DO UPDATE SET
+                discord_user_id = excluded.discord_user_id,
+                throne_creator_id = excluded.throne_creator_id,
+                hide_own_purchases = excluded.hide_own_purchases,
+                tracking_mode = CASE
+                    WHEN throne_creators.tracking_mode = 'webhook' THEN 'webhook'
+                    ELSE excluded.tracking_mode
+                END,
+                webhook_secret = CASE
+                    WHEN throne_creators.webhook_secret != '' THEN throne_creators.webhook_secret
+                    ELSE excluded.webhook_secret
+                END,
+                overlay_detected = excluded.overlay_detected,
+                last_overlay_check_at = excluded.last_overlay_check_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                guild_id,
+                discord_user_id,
+                throne_handle,
+                throne_creator_id,
+                int(bool(hide_own_purchases)) if hide_own_purchases is not None else None,
+                tracking_mode,
+                webhook_secret,
+                int(bool(overlay_detected)),
+                last_overlay_check_at,
+                now,
+                now,
+            ),
+        ):
+            pass
+        await self.connection.commit()
+        row = await self.get_throne_creator_by_handle(guild_id=guild_id, throne_handle=throne_handle)
+        if row is None:
+            raise RuntimeError(f"Failed to upsert throne_creator for {throne_handle!r}")
+        return row
+
+    async def get_throne_creator_by_handle(
+        self, *, guild_id: str, throne_handle: str
+    ) -> ThroneCreator | None:
+        async with self.connection.execute(
+            """
+            SELECT * FROM throne_creators
+            WHERE guild_id = ? AND throne_handle = ?
+            """,
+            (guild_id, throne_handle),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return ThroneCreator.from_row(row)
+
+    async def get_throne_creators_by_creator_id(
+        self, *, throne_creator_id: str
+    ) -> list[ThroneCreator]:
+        async with self.connection.execute(
+            """
+            SELECT * FROM throne_creators
+            WHERE throne_creator_id = ?
+            """,
+            (throne_creator_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [ThroneCreator.from_row(r) for r in rows]
+
+    async def update_throne_creator_webhook_connected(
+        self,
+        *,
+        creator_id: int,
+        webhook_connected_at: str,
+        last_successful_event_at: str,
+    ) -> None:
+        now = _utc_now()
+        await self.connection.execute(
+            """
+            UPDATE throne_creators
+            SET
+                tracking_mode = 'webhook',
+                webhook_connected_at = COALESCE(webhook_connected_at, ?),
+                last_successful_event_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (webhook_connected_at, last_successful_event_at, now, creator_id),
+        )
+        await self.connection.commit()
