@@ -521,6 +521,7 @@ async def _resolve_creator_info_by_username(
         if not isinstance(handle, str):
             handle = username
         raw_hop = fields.get("hideOwnPurchases")
+        # hideOwnPurchases is a Firestore boolean; None means the field is absent.
         hide_own_purchases: bool | None = bool(raw_hop) if raw_hop is not None else None
         return CreatorInfo(
             creator_id=raw_id,

@@ -456,7 +456,10 @@ class RobEventCog(commands.Cog):
             guild_id=guild_id,
             throne_handle=creator_info.throne_handle,
         )
-        webhook_secret = (existing.webhook_secret if existing is not None else None) or secrets.token_urlsafe(32)
+        if existing is not None and existing.webhook_secret:
+            webhook_secret = existing.webhook_secret
+        else:
+            webhook_secret = secrets.token_urlsafe(32)
 
         # Determine tracking mode: keep 'webhook' if already connected, else
         # 'overlay' if overlays exist, else 'disabled'.

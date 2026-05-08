@@ -964,7 +964,7 @@ class Database:
                     ELSE excluded.tracking_mode
                 END,
                 webhook_secret = CASE
-                    WHEN throne_creators.webhook_secret != '' THEN throne_creators.webhook_secret
+                    WHEN throne_creators.webhook_secret IS NOT NULL AND throne_creators.webhook_secret != '' THEN throne_creators.webhook_secret
                     ELSE excluded.webhook_secret
                 END,
                 overlay_detected = excluded.overlay_detected,

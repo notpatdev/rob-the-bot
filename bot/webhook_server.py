@@ -215,7 +215,6 @@ def _verify_ed25519(
 ) -> bool:
     """Verify an Ed25519 signature. Returns False on any error."""
     try:
-        from cryptography.exceptions import InvalidSignature
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
@@ -228,7 +227,7 @@ def _verify_ed25519(
             return False
         public_key.verify(signature_bytes, message)
         return True
-    except (InvalidSignature, ValueError, Exception):
+    except Exception:
         return False
 
 
@@ -297,10 +296,11 @@ class ThroneWebhookServer:
 
         # 2 & 3. Timestamp verification.
         ts_header = request.headers.get(config.throne_webhook_timestamp_header, "")
-        if not ts_header.strip().lstrip("-").isdigit():
+        ts_stripped = ts_header.strip()
+        if not ts_stripped.isdigit():
             log.debug("Webhook rejected: missing or non-numeric timestamp header.")
             return web.Response(status=401, text="Missing or invalid timestamp")
-        ts_value = int(ts_header)
+        ts_value = int(ts_stripped)
         now_ts = int(time.time())
         skew = abs(now_ts - ts_value)
         if skew > config.throne_webhook_max_timestamp_skew_seconds:
@@ -386,7 +386,7 @@ class ThroneWebhookServer:
 
         domme_user_id = int(matched_row.discord_user_id)
         amount_usd = fields["amount_usd"] if fields["amount_usd"] is not None else 0.0
-        is_private = fields["is_private"] or fields["amount_usd"] is None
+        is_private = fields["is_private"]
 
         # Determine active event key.
         event_cog = self.bot.get_cog("RobEventCog")
