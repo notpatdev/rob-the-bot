@@ -17,6 +17,11 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+_COLOR_INFO = 9_133_302
+_COLOR_SUCCESS = 5_763_719
+_COLOR_ADMIN = 15_379_208
+
+
 def _medal(rank: int) -> str:
     return {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"**#{rank}**")
 
@@ -25,6 +30,16 @@ def format_money(amount: float | None) -> str:
     if amount is None:
         return "Unknown"
     return f"${amount:,.2f}"
+
+
+def format_timestamp(value: str | None) -> str:
+    if not value:
+        return "Never"
+    try:
+        timestamp = int(datetime.fromisoformat(value).timestamp())
+    except ValueError:
+        return value
+    return f"<t:{timestamp}:R> / <t:{timestamp}:f>"
 
 
 def _send_suffix(count: int) -> str:
@@ -248,7 +263,7 @@ class EventStatusView(discord.ui.LayoutView):
         event_block = "\n".join(configured_events) if configured_events else "No event rows loaded."
         self.add_item(
             make_container(
-                "🗓️ Event Config",
+                "🎉 Rob | Events | Status",
                 "Events are driven from JSON now.",
                 sections=[
                     separator(),
@@ -260,8 +275,8 @@ class EventStatusView(discord.ui.LayoutView):
                     text_block(f"**Registrations**\n{domme_count} Dommes · {sub_count} Subs"),
                     text_block(f"**Live totals**\n{live_send_count} sends · {live_send_total}"),
                 ],
-                footer="Edit the JSON, then reload or restart.",
-                accent_color=discord.Colour.blurple(),
+                footer="Rob read the config and complained quietly.",
+                accent_color=_COLOR_INFO,
             )
         )
 
@@ -293,7 +308,7 @@ class ThroneRefreshView(discord.ui.LayoutView):
 
         self.add_item(
             make_container(
-                "👑 Throne Refresh",
+                "👑 Rob | Throne Admin | Refresh",
                 detail,
                 sections=[
                     separator(),
@@ -303,7 +318,7 @@ class ThroneRefreshView(discord.ui.LayoutView):
                     text_block(f"**Page enrichment**\n{page_status}"),
                     text_block(f"**Cooldowns**\n{retry_status}"),
                 ],
-                accent_color=discord.Colour.gold(),
+                accent_color=_COLOR_ADMIN,
                 footer="One manual cycle. No dramatic overpulling.",
             )
         )
@@ -329,7 +344,7 @@ class ThroneStatusView(discord.ui.LayoutView):
 
         self.add_item(
             make_container(
-                "👑 Throne Tracking Status",
+                "👑 Rob | Throne Admin | Tracker",
                 None,
                 sections=[
                     separator(),
@@ -349,7 +364,7 @@ class ThroneStatusView(discord.ui.LayoutView):
                     text_block(f"**Last manual refresh**\n{last_manual_refresh_at}"),
                     text_block(f"**Last error**\n{last_error}"),
                 ],
-                accent_color=discord.Colour.gold(),
+                accent_color=_COLOR_ADMIN,
                 footer="Powered by vibes and SQLite.",
             )
         )
@@ -404,13 +419,13 @@ class UpdateNotificationView(discord.ui.LayoutView):
         ack_btn = discord.ui.Button(
             label="Acknowledge",
             style=discord.ButtonStyle.success,
-            emoji="✓",
+            emoji="✅",
         )
         ack_btn.callback = self._acknowledge
 
         self.add_item(
             make_container(
-                f"✅ {DEPLOY_NOTIFICATION}",
+                "✅ Rob | Success | Startup DM",
                 (
                     f"Rob came back online <t:{now_ts}:R>.\n"
                     "Latest code should be live now."
@@ -419,7 +434,8 @@ class UpdateNotificationView(discord.ui.LayoutView):
                     separator(),
                     discord.ui.Section("Dismiss this tiny announcement.", accessory=ack_btn),
                 ],
-                accent_color=discord.Colour.gold(),
+                accent_color=_COLOR_SUCCESS,
+                footer=DEPLOY_NOTIFICATION,
             )
         )
 

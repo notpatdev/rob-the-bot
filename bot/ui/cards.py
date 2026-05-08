@@ -94,7 +94,7 @@ def _selected_colour_label(profile_color: int) -> str:
 def success_card(message: str, detail: str | None = None) -> discord.ui.Container:
     body = message if detail is None else f"{message}\n\n{detail}"
     return make_container(
-        "Done.",
+        "✅ Rob | Success | Update",
         body,
         accent_color=COLOR_SUCCESS,
         footer=copy.SUCCESS_FOOTER,
@@ -104,7 +104,7 @@ def success_card(message: str, detail: str | None = None) -> discord.ui.Containe
 def error_card(message: str, detail: str | None = None) -> discord.ui.Container:
     body = message if detail is None else f"{message}\n\n{detail}"
     return make_container(
-        "Rob has concerns.",
+        "⚠️ Rob | Errors | Notice",
         body,
         accent_color=COLOR_DANGER,
         footer=copy.ERROR_FOOTER,
@@ -114,7 +114,7 @@ def error_card(message: str, detail: str | None = None) -> discord.ui.Container:
 def warning_card(message: str, detail: str | None = None) -> discord.ui.Container:
     body = message if detail is None else f"{message}\n\n{detail}"
     return make_container(
-        "Heads up.",
+        "⚠️ Rob | Errors | Warning",
         body,
         accent_color=COLOR_WARNING,
         footer=copy.WARNING_FOOTER,
@@ -124,7 +124,7 @@ def warning_card(message: str, detail: str | None = None) -> discord.ui.Containe
 def info_card(message: str, detail: str | None = None) -> discord.ui.Container:
     body = message if detail is None else f"{message}\n\n{detail}"
     return make_container(
-        "Rob says:",
+        "🎉 Rob | Events | Info",
         body,
         accent_color=COLOR_INFO,
         footer=copy.INFO_FOOTER,
@@ -387,7 +387,10 @@ def build_help_pages(
                     "Admin bits. Button wrench included.",
                     (
                         ("!throne refresh", "Run one manual Throne poll right now."),
-                        ("!throne status", "Show tracker health and cooldowns."),
+                        ("!throne status", "Show Throne registration and webhook tracking health."),
+                        ("!throne list", "List registered Throne users and webhook status."),
+                        ("!throne search <@user|id>", "Show one Throne creator record."),
+                        ("!throne webhook refresh <@user|id>", "Dev-only webhook secret rotation + DM."),
                         ("!event status", "Show loaded event config and current mode."),
                         ("!event reload", "Reload `config/events.json`."),
                         ("/reaction_role_setup", "Create a reaction-role message."),

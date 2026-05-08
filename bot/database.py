@@ -46,6 +46,15 @@ class ThroneCreator:
 
 
 @dataclass(frozen=True)
+class ThroneWebhookSend:
+    discord_user_id: str
+    sub_name: str | None
+    amount_usd: float
+    is_private: bool
+    sent_at: str
+
+
+@dataclass(frozen=True)
 class EventSubTotalRow:
     user_id: int
     total_usd: float
@@ -1019,6 +1028,113 @@ class Database:
         ) as cursor:
             rows = await cursor.fetchall()
         return [ThroneCreator.from_row(r) for r in rows]
+
+    async def get_throne_creators_for_guild(self, *, guild_id: str) -> list[ThroneCreator]:
+        async with self.connection.execute(
+            """
+            SELECT * FROM throne_creators
+            WHERE guild_id = ?
+            ORDER BY created_at ASC
+            """,
+            (guild_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [ThroneCreator.from_row(r) for r in rows]
+
+    async def get_throne_creator_by_discord_user(
+        self, *, guild_id: str, discord_user_id: str
+    ) -> ThroneCreator | None:
+        async with self.connection.execute(
+            """
+            SELECT * FROM throne_creators
+            WHERE guild_id = ? AND discord_user_id = ?
+            LIMIT 1
+            """,
+            (guild_id, discord_user_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return ThroneCreator.from_row(row)
+
+    async def get_latest_webhook_send_for_guild(self, *, guild_id: str) -> ThroneWebhookSend | None:
+        async with self.connection.execute(
+            """
+            SELECT
+                tc.discord_user_id AS discord_user_id,
+                es.sub_name AS sub_name,
+                es.amount_usd AS amount_usd,
+                es.is_private AS is_private,
+                es.sent_at AS sent_at
+            FROM event_sends es
+            INNER JOIN throne_creators tc
+                ON tc.discord_user_id = CAST(es.domme_user_id AS TEXT)
+            WHERE tc.guild_id = ? AND es.source = 'webhook'
+            ORDER BY es.sent_at DESC
+            LIMIT 1
+            """,
+            (guild_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return ThroneWebhookSend(
+            discord_user_id=str(row["discord_user_id"]),
+            sub_name=row["sub_name"],
+            amount_usd=float(row["amount_usd"] or 0.0),
+            is_private=bool(row["is_private"]),
+            sent_at=str(row["sent_at"]),
+        )
+
+    async def get_latest_webhook_send_for_domme(
+        self, *, domme_user_id: int
+    ) -> ThroneWebhookSend | None:
+        async with self.connection.execute(
+            """
+            SELECT
+                CAST(domme_user_id AS TEXT) AS discord_user_id,
+                sub_name,
+                amount_usd,
+                is_private,
+                sent_at
+            FROM event_sends
+            WHERE domme_user_id = ? AND source = 'webhook'
+            ORDER BY sent_at DESC
+            LIMIT 1
+            """,
+            (domme_user_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return ThroneWebhookSend(
+            discord_user_id=str(row["discord_user_id"]),
+            sub_name=row["sub_name"],
+            amount_usd=float(row["amount_usd"] or 0.0),
+            is_private=bool(row["is_private"]),
+            sent_at=str(row["sent_at"]),
+        )
+
+    async def reset_throne_creator_webhook(
+        self,
+        *,
+        creator_id: int,
+        webhook_secret: str,
+    ) -> None:
+        now = _utc_now()
+        await self.connection.execute(
+            """
+            UPDATE throne_creators
+            SET
+                webhook_secret = ?,
+                tracking_mode = 'disabled',
+                webhook_connected_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (webhook_secret, now, creator_id),
+        )
+        await self.connection.commit()
 
     async def update_throne_creator_webhook_connected(
         self,

@@ -20,7 +20,13 @@ Prefix commands:
 - `!throne refresh`
   Run one manual Throne poll immediately.
 - `!throne status`
-  Show tracker health, cooldowns, and last poll state.
+  Show Throne registration and webhook tracking health.
+- `!throne list`
+  List all registered Throne creators and webhook status.
+- `!throne search <@user|id>`
+  Show one creator's Throne registration details.
+- `!throne webhook refresh <@user|id>`
+  Dev-only: rotate a creator webhook secret and DM the new URL.
 - `!event status`
   Show the currently loaded event config and active mode.
 - `!event reload`

@@ -25,6 +25,7 @@ from bot.event_views import (
     SubSignupModal,
     UpdateNotificationView,
     format_money,
+    format_timestamp,
 )
 from bot.throne_scraper import (
     has_overlay_data,
@@ -94,7 +95,7 @@ class RobEventCog(commands.Cog):
     @staticmethod
     def _format_discord_timestamp(moment: datetime) -> str:
         ts = int(moment.timestamp())
-        return f"<t:{ts}:F> (<t:{ts}:R>)"
+        return f"<t:{ts}:R> / <t:{ts}:f>"
 
     def _warn_once(self, key: str, message: str, *args: object) -> None:
         if key in self._warned_runtime_targets:
@@ -350,15 +351,18 @@ class RobEventCog(commands.Cog):
             assert event.start_at is not None and event.end_at is not None
             if event.is_active(now):
                 configured_events.append(
-                    f"{event.theme.emoji} {event.name} — active until <t:{int(event.end_at.timestamp())}:F>"
+                    f"{event.theme.emoji} {event.name} — active until "
+                    f"<t:{int(event.end_at.timestamp())}:R> / <t:{int(event.end_at.timestamp())}:f>"
                 )
             elif now < event.start_at:
                 configured_events.append(
-                    f"{event.theme.emoji} {event.name} — scheduled for <t:{int(event.start_at.timestamp())}:F>"
+                    f"{event.theme.emoji} {event.name} — scheduled for "
+                    f"<t:{int(event.start_at.timestamp())}:R> / <t:{int(event.start_at.timestamp())}:f>"
                 )
             else:
                 configured_events.append(
-                    f"{event.theme.emoji} {event.name} — ended <t:{int(event.end_at.timestamp())}:F>"
+                    f"{event.theme.emoji} {event.name} — ended "
+                    f"<t:{int(event.end_at.timestamp())}:R> / <t:{int(event.end_at.timestamp())}:f>"
                 )
 
         await ctx.reply(
@@ -496,9 +500,9 @@ class RobEventCog(commands.Cog):
 
         # Compose ephemeral reply.
         mode_labels = {
-            "webhook": "✅ Webhook (real-time)",
-            "overlay": "🔔 Stream Alerts overlay (polled)",
-            "disabled": "⚠️ Not connected — see setup instructions below",
+            "webhook": "🟢 Webhook (real-time)",
+            "overlay": "🟡 Stream Alerts overlay (polled)",
+            "disabled": "⚪ Not connected — see setup instructions below",
         }
         mode_label = mode_labels.get(tracking_mode, tracking_mode)
 
@@ -616,7 +620,7 @@ class RobEventCog(commands.Cog):
 
         domme_view = LeaderboardView(
             cog=self,
-            title=f"{context.theme.emoji} Domme Leaderboard",
+            title="🏆 Rob | Leaderboards | Dommes",
             board_title=None,
             status_lines=status_lines,
             rows=domme_rows,
@@ -630,7 +634,7 @@ class RobEventCog(commands.Cog):
         )
         sub_view = LeaderboardView(
             cog=self,
-            title=f"{context.theme.emoji} Sub Leaderboard",
+            title="🏆 Rob | Leaderboards | Subs",
             board_title=None,
             status_lines=status_lines,
             rows=sub_rows,
@@ -722,7 +726,6 @@ class RobEventCog(commands.Cog):
 
         event = self.events_config.get_event(state.event_key)
         theme = event.theme if event is not None else self.events_config.default_theme
-        event_name = event.name if event is not None else (state.event_name or state.event_key)
         channel = self._report_channel(guild)
         if channel is None:
             self._warn_once(
@@ -739,7 +742,7 @@ class RobEventCog(commands.Cog):
         domme_rows = [(f"<@{row.user_id}>", row.total_usd, row.send_count) for row in domme_rows_db]
         sub_rows = [(f"<@{row.user_id}>", row.total_usd, row.send_count) for row in sub_rows_db]
 
-        title = f"{theme.emoji} {event_name} — Final Report"
+        title = "🏆 Rob | Leaderboards | Final Report"
         summary_view = FinalReportSummaryView(
             title=title,
             accent_color=theme.accent_color,
@@ -804,7 +807,7 @@ class RobEventCog(commands.Cog):
             if context.active_state.ends_at:
                 try:
                     end_ts = int(datetime.fromisoformat(context.active_state.ends_at).timestamp())
-                    status.append(f"Ends <t:{end_ts}:R>")
+                    status.append(f"Ends <t:{end_ts}:R> / <t:{end_ts}:f>")
                 except ValueError:
                     pass
             return status
@@ -821,10 +824,4 @@ class RobEventCog(commands.Cog):
         return "Default live mode"
 
     def _format_iso_label(self, value: str | None) -> str:
-        if not value:
-            return "Unknown"
-        try:
-            timestamp = int(datetime.fromisoformat(value).timestamp())
-        except ValueError:
-            return value
-        return f"<t:{timestamp}:F>"
+        return format_timestamp(value)
