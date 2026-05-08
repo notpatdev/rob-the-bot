@@ -23,6 +23,7 @@ from aiohttp import web
 
 from bot.config import BotConfig
 from bot.database import Database
+from bot.utils import normalize_sender_name
 
 if TYPE_CHECKING:
     import discord
@@ -399,7 +400,7 @@ class ThroneWebhookServer:
         # 11. Insert into event_sends — dedup via unique indexes.
         send_id = await self.database.log_event_send(
             domme_user_id=domme_user_id,
-            sub_name=fields["gifter_username"],
+            sub_name=normalize_sender_name(fields["gifter_username"]),
             amount_usd=amount_usd,
             item_name=fields["item_name"],
             item_image_url=fields["item_image_url"],
