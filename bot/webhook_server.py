@@ -59,154 +59,262 @@ def _compute_fallback_hash(
 
 
 def _extract_gift_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    """Extract normalised gift fields from a Throne webhook payload.
+"""Extract normalised gift fields from a Throne webhook payload.
 
-    Throne uses slightly different shapes for gift_purchased,
-    contribution_purchased, and gift_crowdfunded. We use .get() everywhere
-    and never raise on missing fields.
-    """
-    # Top-level fields
-    event_id: str | None = payload.get("id") or payload.get("eventId") or payload.get("event_id")
-    event_type: str | None = payload.get("type") or payload.get("eventType") or payload.get("event_type")
-    order_id: str | None = payload.get("orderId") or payload.get("order_id")
-    status: str | None = payload.get("status")
-    message: str | None = payload.get("message")
+Supports both the documented Throne webhook envelope where event-specific
+values live under ``payload["data"]`` and older / alternate top-level
+shapes. Never raises on missing fields.
+"""
 
-    # Timestamp — try multiple keys
-    purchased_at: str | None = (
-        payload.get("purchasedAt")
-        or payload.get("purchased_at")
-        or payload.get("createdAt")
-        or payload.get("created_at")
-        or payload.get("timestamp")
-    )
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
-    # Sender / gifter info — may be nested in a "gifter" or "sender" object
-    gifter_obj: dict[str, Any] = {}
+def _first(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+def _first_str(*values: Any) -> str | None:
+    value = _first(*values)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+def _truthy(*values: Any) -> bool:
+    for value in values:
+        if bool(value):
+            return True
+    return False
+
+data = _as_dict(payload.get("data"))
+
+# Top-level envelope fields
+event_id: str | None = _first_str(
+    payload.get("id"),
+    payload.get("eventId"),
+    payload.get("event_id"),
+)
+event_type: str | None = _first_str(
+    payload.get("type"),
+    payload.get("eventType"),
+    payload.get("event_type"),
+)
+
+# Mixed top-level / nested fields
+order_id: str | None = _first_str(
+    data.get("orderId"),
+    data.get("order_id"),
+    payload.get("orderId"),
+    payload.get("order_id"),
+)
+status: str | None = _first_str(
+    data.get("status"),
+    payload.get("status"),
+)
+message: str | None = _first_str(
+    data.get("message"),
+    payload.get("message"),
+)
+
+purchased_at: str | None = _first_str(
+    data.get("purchasedAt"),
+    data.get("purchased_at"),
+    data.get("createdAt"),
+    data.get("created_at"),
+    data.get("timestamp"),
+    payload.get("purchasedAt"),
+    payload.get("purchased_at"),
+    payload.get("createdAt"),
+    payload.get("created_at"),
+    payload.get("timestamp"),
+)
+
+# Sender / gifter info
+gifter_obj: dict[str, Any] = {}
+for container in (data, payload):
     for key in ("gifter", "sender", "user"):
-        v = payload.get(key)
-        if isinstance(v, dict):
-            gifter_obj = v
+        value = container.get(key)
+        if isinstance(value, dict):
+            gifter_obj = value
             break
+    if gifter_obj:
+        break
 
-    gifter_username: str | None = (
-        gifter_obj.get("username")
-        or gifter_obj.get("name")
-        or payload.get("gifterUsername")
-        or payload.get("gifter_username")
-        or payload.get("senderUsername")
-        or payload.get("sender_username")
-        or payload.get("senderName")
-        or payload.get("sender_name")
-    )
-    is_anonymous: bool = bool(
-        gifter_obj.get("isAnonymous")
-        or payload.get("isAnonymous")
-        or payload.get("is_anonymous")
-        or payload.get("anonymous")
-    )
-    if is_anonymous:
-        gifter_username = None
+gifter_username: str | None = _first_str(
+    gifter_obj.get("username"),
+    gifter_obj.get("name"),
+    data.get("gifterUsername"),
+    data.get("gifter_username"),
+    data.get("senderUsername"),
+    data.get("sender_username"),
+    data.get("senderName"),
+    data.get("sender_name"),
+    payload.get("gifterUsername"),
+    payload.get("gifter_username"),
+    payload.get("senderUsername"),
+    payload.get("sender_username"),
+    payload.get("senderName"),
+    payload.get("sender_name"),
+)
 
-    # Item info — may be nested in a "gift" or "item" or "product" object
-    item_obj: dict[str, Any] = {}
+is_anonymous: bool = _truthy(
+    gifter_obj.get("isAnonymous"),
+    data.get("isAnonymous"),
+    data.get("is_anonymous"),
+    data.get("anonymous"),
+    payload.get("isAnonymous"),
+    payload.get("is_anonymous"),
+    payload.get("anonymous"),
+)
+if is_anonymous:
+    gifter_username = None
+
+# Item info
+item_obj: dict[str, Any] = {}
+for container in (data, payload):
     for key in ("gift", "item", "product", "wishlistItem"):
-        v = payload.get(key)
-        if isinstance(v, dict):
-            item_obj = v
+        value = container.get(key)
+        if isinstance(value, dict):
+            item_obj = value
             break
+    if item_obj:
+        break
 
-    item_name: str | None = (
-        item_obj.get("name")
-        or item_obj.get("title")
-        or payload.get("itemName")
-        or payload.get("item_name")
-        or payload.get("productName")
-        or payload.get("product_name")
-        or payload.get("giftName")
-        or payload.get("gift_name")
-    )
-    item_image_url: str | None = (
-        item_obj.get("imageUrl")
-        or item_obj.get("image_url")
-        or item_obj.get("image")
-        or payload.get("itemImageUrl")
-        or payload.get("item_image_url")
-        or payload.get("imageUrl")
-        or payload.get("image_url")
-    )
-    if item_image_url and not str(item_image_url).lower().startswith(("http://", "https://")):
-        item_image_url = None
+item_name: str | None = _first_str(
+    item_obj.get("name"),
+    item_obj.get("title"),
+    data.get("itemName"),
+    data.get("item_name"),
+    payload.get("itemName"),
+    payload.get("item_name"),
+    payload.get("productName"),
+    payload.get("product_name"),
+    payload.get("giftName"),
+    payload.get("gift_name"),
+)
 
-    # Amount — prefer cents to avoid float precision issues
-    amount_cents: int | None = None
-    amount_usd: float | None = None
-    currency: str | None = (
-        payload.get("currency")
-        or item_obj.get("currency")
+item_image_url: str | None = _first_str(
+    item_obj.get("imageUrl"),
+    item_obj.get("image_url"),
+    item_obj.get("image"),
+    data.get("itemThumbnailUrl"),
+    data.get("item_thumbnail_url"),
+    data.get("itemImageUrl"),
+    data.get("item_image_url"),
+    payload.get("itemThumbnailUrl"),
+    payload.get("item_thumbnail_url"),
+    payload.get("itemImageUrl"),
+    payload.get("item_image_url"),
+    payload.get("imageUrl"),
+    payload.get("image_url"),
+)
+if item_image_url and not item_image_url.lower().startswith(("http://", "https://")):
+    item_image_url = None
+
+currency: str | None = _first_str(
+    data.get("currency"),
+    payload.get("currency"),
+    item_obj.get("currency"),
+)
+
+amount_cents: int | None = None
+amount_usd: float | None = None
+
+raw_cents = _first(
+    data.get("amountCents"),
+    data.get("amount_cents"),
+    payload.get("amountCents"),
+    payload.get("amount_cents"),
+    payload.get("priceCents"),
+    payload.get("price_cents"),
+    item_obj.get("amountCents"),
+    item_obj.get("amount_cents"),
+)
+
+if raw_cents is not None:
+    try:
+        amount_cents = int(raw_cents)
+        amount_usd = amount_cents / 100.0
+    except (TypeError, ValueError):
+        pass
+
+if amount_usd is None:
+    raw_amount = _first(
+        data.get("amount"),
+        payload.get("amount"),
+        item_obj.get("amount"),
+        data.get("amountUsd"),
+        data.get("amount_usd"),
+        data.get("priceUsd"),
+        data.get("price_usd"),
+        payload.get("amountUsd"),
+        payload.get("amount_usd"),
+        payload.get("priceUsd"),
+        payload.get("price_usd"),
+        item_obj.get("amountUsd"),
+        item_obj.get("amount_usd"),
+        item_obj.get("priceUsd"),
+        item_obj.get("price_usd"),
     )
 
-    raw_cents = (
-        item_obj.get("amountCents")
-        or item_obj.get("amount_cents")
-        or payload.get("amountCents")
-        or payload.get("amount_cents")
-        or payload.get("priceCents")
-        or payload.get("price_cents")
-    )
-    if raw_cents is not None:
+    if raw_amount is not None:
         try:
-            amount_cents = int(raw_cents)
-            amount_usd = amount_cents / 100.0
+            if isinstance(raw_amount, str):
+                cleaned = raw_amount.strip().replace("$", "").replace(",", "")
+                if cleaned:
+                    numeric_amount = float(cleaned)
+                else:
+                    numeric_amount = None
+            else:
+                numeric_amount = float(raw_amount)
+
+            if numeric_amount is not None:
+                # Throne docs: contribution_purchased.data.amount is in minor units.
+                if (
+                    event_type == "contribution_purchased"
+                    and currency
+                    and currency.upper() == "USD"
+                ):
+                    amount_cents = int(round(numeric_amount))
+                    amount_usd = amount_cents / 100.0
+                else:
+                    amount_usd = numeric_amount
+                    if amount_cents is None:
+                        amount_cents = int(round(numeric_amount * 100))
         except (TypeError, ValueError):
             pass
 
-    if amount_usd is None:
-        raw_usd = (
-            item_obj.get("amountUsd")
-            or item_obj.get("amount_usd")
-            or item_obj.get("priceUsd")
-            or item_obj.get("price_usd")
-            or payload.get("amountUsd")
-            or payload.get("amount_usd")
-            or payload.get("priceUsd")
-            or payload.get("price_usd")
-            or item_obj.get("amount")
-            or payload.get("amount")
-        )
-        if raw_usd is not None:
-            try:
-                amount_usd = float(raw_usd)
-                if amount_cents is None:
-                    amount_cents = int(round(amount_usd * 100))
-            except (TypeError, ValueError):
-                pass
+is_private: bool = _truthy(
+    data.get("isPrivate"),
+    data.get("is_private"),
+    data.get("amountHidden"),
+    data.get("hideAmount"),
+    payload.get("isPrivate"),
+    payload.get("is_private"),
+    payload.get("amountHidden"),
+    payload.get("hideAmount"),
+)
+if is_private:
+    amount_usd = None
 
-    is_private: bool = bool(
-        payload.get("isPrivate")
-        or payload.get("is_private")
-        or payload.get("amountHidden")
-        or payload.get("hideAmount")
-    )
-    if is_private:
-        amount_usd = None
-
-    return {
-        "event_id": event_id,
-        "event_type": event_type,
-        "order_id": order_id,
-        "status": status,
-        "message": message,
-        "purchased_at": purchased_at,
-        "gifter_username": gifter_username,
-        "is_anonymous": is_anonymous,
-        "item_name": item_name,
-        "item_image_url": item_image_url,
-        "amount_cents": amount_cents,
-        "amount_usd": amount_usd,
-        "currency": currency,
-        "is_private": is_private,
-    }
+return {
+    "event_id": event_id,
+    "event_type": event_type,
+    "order_id": order_id,
+    "status": status,
+    "message": message,
+    "purchased_at": purchased_at,
+    "gifter_username": gifter_username,
+    "is_anonymous": is_anonymous,
+    "item_name": item_name,
+    "item_image_url": item_image_url,
+    "amount_cents": amount_cents,
+    "amount_usd": amount_usd,
+    "currency": currency,
+    "is_private": is_private,
+}
 
 
 def _verify_ed25519(
