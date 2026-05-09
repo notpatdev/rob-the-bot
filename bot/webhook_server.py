@@ -383,6 +383,11 @@ class ThroneWebhookServer:
             "Throne webhook server listening on 127.0.0.1:%s",
             self.config.throne_webhook_port,
         )
+        if self.config.throne_webhook_debug_log_payload:
+            log.warning(
+                "THRONE_WEBHOOK_DEBUG_LOG_PAYLOAD=true. Raw webhook bodies and parsed payload summaries "
+                "will be written to logs and may include gift details or user data. Enable only temporarily."
+            )
 
     async def stop(self) -> None:
         if self._runner is not None:
