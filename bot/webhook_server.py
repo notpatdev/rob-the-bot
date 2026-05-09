@@ -402,10 +402,10 @@ class ThroneWebhookServer:
     async def _handle_webhook(self, request: web.Request) -> web.Response:
         creator_id: str = request.match_info["creator_id"]
         url_secret: str = request.match_info["secret"]
-        config = self.config
 
         # 1. Read raw body bytes — must happen before any JSON parsing.
         raw_body: bytes = await request.read()
+        config = self.config
         if config.throne_webhook_debug_log_payload:
             log.info(
                 "Webhook debug payload for creator %s: %s",
