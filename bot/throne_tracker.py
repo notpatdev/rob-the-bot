@@ -448,8 +448,6 @@ class ThroneTrackerCog(commands.Cog):
 
     @throne_webhook_group.command(name="refresh")
     async def throne_webhook_refresh(self, ctx: commands.Context[commands.Bot], user_ref: str) -> None:
-        if not await self._check_admin_context(ctx):
-            return
         if ctx.guild is None:
             await ctx.reply("Server only.", mention_author=False)
             return

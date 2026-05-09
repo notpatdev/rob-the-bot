@@ -383,6 +383,11 @@ class ThroneWebhookServer:
             "Throne webhook server listening on 127.0.0.1:%s",
             self.config.throne_webhook_port,
         )
+        if self.config.throne_webhook_debug_log_payload:
+            log.warning(
+                "THRONE_WEBHOOK_DEBUG_LOG_PAYLOAD=true. Raw webhook bodies and parsed payload summaries "
+                "will be written to logs and may include gift details or user data. Enable only temporarily."
+            )
 
     async def stop(self) -> None:
         if self._runner is not None:
@@ -400,8 +405,13 @@ class ThroneWebhookServer:
 
         # 1. Read raw body bytes — must happen before any JSON parsing.
         raw_body: bytes = await request.read()
-
         config = self.config
+        if config.throne_webhook_debug_log_payload:
+            log.info(
+                "Webhook debug payload for creator %s: %s",
+                creator_id,
+                raw_body.decode("utf-8", errors="replace"),
+            )
 
         # 2 & 3. Timestamp verification.
         ts_header = request.headers.get(config.throne_webhook_timestamp_header, "")
@@ -465,6 +475,15 @@ class ThroneWebhookServer:
 
         # 9. Extract gift fields.
         fields = _extract_gift_fields(payload)
+        if config.throne_webhook_debug_log_payload:
+            log.info(
+                "Webhook debug summary for creator %s: event_id=%r event_type=%r data=%s fields=%s",
+                creator_id,
+                fields["event_id"],
+                fields["event_type"],
+                payload.get("data"),
+                fields,
+            )
 
         event_type = fields["event_type"] or ""
         # Only process purchase events; ignore pings / test events gracefully.

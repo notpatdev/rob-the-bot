@@ -42,6 +42,7 @@ class BotConfig:
     throne_webhook_port: int
     throne_webhook_base_url: str | None
     throne_webhook_require_signature: bool
+    throne_webhook_debug_log_payload: bool
     throne_public_key_pem: str | None
     throne_webhook_timestamp_header: str
     throne_webhook_signature_header: str
@@ -142,6 +143,9 @@ def load_config() -> BotConfig:
         throne_webhook_base_url=os.getenv("THRONE_WEBHOOK_BASE_URL") or None,
         throne_webhook_require_signature=(
             os.getenv("THRONE_WEBHOOK_REQUIRE_SIGNATURE", "true").strip().lower() != "false"
+        ),
+        throne_webhook_debug_log_payload=(
+            os.getenv("THRONE_WEBHOOK_DEBUG_LOG_PAYLOAD", "false").strip().lower() == "true"
         ),
         throne_public_key_pem=os.getenv("THRONE_PUBLIC_KEY_PEM") or None,
         throne_webhook_timestamp_header=os.getenv(

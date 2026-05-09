@@ -103,7 +103,10 @@ Useful optional values:
 - `THRONE_POLL_PER_DOMME_DELAY_SECONDS`
 - `THRONE_HTTP_TIMEOUT_SECONDS`
 - `THRONE_USER_AGENT`
+- `THRONE_WEBHOOK_DEBUG_LOG_PAYLOAD`
 - `EVENTS_CONFIG_PATH`
+
+Set `THRONE_WEBHOOK_DEBUG_LOG_PAYLOAD=true` temporarily if you need the webhook server to write raw Throne request bodies and parsed payload summaries to `journalctl` while testing webhooks. Warning: this can include gift details and user data in logs, so leave it off in normal operation.
 
 ## How Tracking Works
 
