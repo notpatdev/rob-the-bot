@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot.ui.cards import success_view
-from bot.ui.components import action_section, make_container, media_gallery, separator, subtle, text_block
+from bot.ui.components import action_section, make_container, separator, subtle, text_block, thumbnail_section
 from bot.ui.copy import DEPLOY_NOTIFICATION
 
 if TYPE_CHECKING:
@@ -217,33 +217,38 @@ class SendNotificationView(discord.ui.LayoutView):
         title: str,
         accent_color: discord.Colour | int,
         sub_label: str,
-        domme_label: str,
         amount_label: str,
         item_name: str | None,
         item_image_url: str | None,
-        sub_rank: int | None,
-        domme_send_count: int,
-        rank_label: str,
+        send_public_id: str,
+        domme_rank_line: str,
+        sub_rank_line: str | None,
+        sub_total_line: str | None,
+        anonymous_rank_line: str | None,
+        footer: str,
     ) -> None:
         super().__init__(timeout=None)
         sections: list[discord.ui.Item] = [separator()]
-        gallery = media_gallery(item_image_url) if item_image_url else None
-        if gallery is not None:
-            sections.append(gallery)
-        sections.extend(
-            [
-                text_block(f"**Sub**\n{sub_label}"),
-                text_block(f"**Domme**\n{domme_label}"),
-                text_block(f"**Amount**\n{amount_label}"),
-            ]
-        )
-        if item_name:
-            sections.append(text_block(f"**Item**\n{item_name}"))
+        sections.append(text_block(f"**Sub:** {sub_label}"))
+        sections.append(text_block(f"**Amount:** {amount_label} (United States Dollar)"))
 
-        summary_lines = [f"Domme total sends: **{domme_send_count}**"]
-        if sub_rank is not None:
-            summary_lines.insert(0, f"{rank_label}: **#{sub_rank}**")
-        sections.extend([separator(), text_block("**Leaderboard fallout**\n" + "\n".join(summary_lines))])
+        item_text = f"**Item:** {item_name or 'Unknown item'}"
+        if item_image_url:
+            sections.append(thumbnail_section(item_text, item_image_url))
+        else:
+            sections.append(text_block(item_text))
+
+        sections.append(text_block(f"**Rob Send ID:** `{send_public_id}`"))
+
+        rank_lines = [domme_rank_line]
+        if sub_rank_line:
+            rank_lines.append(sub_rank_line)
+        if sub_total_line:
+            rank_lines.append(sub_total_line)
+        if anonymous_rank_line:
+            rank_lines.append(anonymous_rank_line)
+        sections.extend([separator(), text_block("\n".join(rank_lines))])
+        sections.append(separator())
 
         self.add_item(
             make_container(
@@ -251,6 +256,7 @@ class SendNotificationView(discord.ui.LayoutView):
                 None,
                 sections=sections,
                 accent_color=accent_color,
+                footer=footer,
             )
         )
 

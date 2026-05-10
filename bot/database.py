@@ -549,6 +549,72 @@ class Database:
             return None
         return int(row["rank"])
 
+    async def get_event_sub_total(
+        self,
+        *,
+        user_id: int,
+        event_key: str | None = None,
+    ) -> EventSubTotalRow:
+        where_sql, params = self._event_filter(event_key)
+        query = f"""
+            SELECT
+                claimed_sub_user_id AS user_id,
+                COALESCE(SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END), 0) AS total_usd,
+                COUNT(*) AS send_count
+            FROM event_sends
+            WHERE claimed_sub_user_id = ?
+            {where_sql}
+            GROUP BY claimed_sub_user_id
+        """
+        async with self.connection.execute(query, (user_id, *params)) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return EventSubTotalRow(user_id=user_id, total_usd=0.0, send_count=0)
+        return EventSubTotalRow(
+            user_id=int(row["user_id"]),
+            total_usd=float(row["total_usd"] or 0.0),
+            send_count=int(row["send_count"]),
+        )
+
+    async def get_event_unclaimed_rank(
+        self,
+        *,
+        sub_name: str | None,
+        event_key: str | None = None,
+    ) -> int | None:
+        where_sql, params = self._event_filter(event_key)
+        target_key = "__anonymous__"
+        if sub_name is not None:
+            trimmed = sub_name.strip()
+            if trimmed:
+                target_key = trimmed.casefold()
+        query = f"""
+            WITH grouped AS (
+                SELECT
+                    COALESCE(NULLIF(LOWER(TRIM(sub_name)), ''), '__anonymous__') AS sender_key,
+                    SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END) AS total_usd,
+                    COUNT(*) AS send_count
+                FROM event_sends
+                WHERE claimed_sub_user_id IS NULL
+                {where_sql}
+                GROUP BY sender_key
+            )
+            SELECT rank FROM (
+                SELECT
+                    sender_key,
+                    ROW_NUMBER() OVER (
+                        ORDER BY total_usd DESC, send_count DESC, sender_key ASC
+                    ) AS rank
+                FROM grouped
+            ) ranked
+            WHERE sender_key = ?
+        """
+        async with self.connection.execute(query, (*params, target_key)) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return int(row["rank"])
+
     async def get_event_unclaimed_total(self, *, event_key: str | None = None) -> float:
         where_sql, params = self._event_filter(event_key)
         query = f"""
@@ -650,6 +716,31 @@ class Database:
             total_usd=float(row["total_usd"] or 0.0),
             send_count=int(row["send_count"]),
         )
+
+    async def get_event_domme_rank(self, *, user_id: int, event_key: str | None = None) -> int | None:
+        where_sql, params = self._event_filter(event_key)
+        query = f"""
+            SELECT rank FROM (
+                SELECT
+                    domme_user_id AS user_id,
+                    ROW_NUMBER() OVER (
+                        ORDER BY
+                            SUM(CASE WHEN is_private = 0 THEN amount_usd ELSE 0 END) DESC,
+                            COUNT(*) DESC,
+                            domme_user_id ASC
+                    ) AS rank
+                FROM event_sends
+                WHERE 1 = 1
+                {where_sql}
+                GROUP BY domme_user_id
+            ) ranked
+            WHERE user_id = ?
+        """
+        async with self.connection.execute(query, (*params, user_id)) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return int(row["rank"])
 
     async def get_send_summary(self, *, event_key: str | None = None) -> SendSummary:
         where_sql, params = self._event_filter(event_key)

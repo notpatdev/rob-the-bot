@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import random
@@ -771,25 +772,60 @@ class ThroneTrackerCog(commands.Cog):
         elif event_cog is not None:
             theme = event_cog.events_config.default_theme
 
-        sub_rank = (
-            await self.database.get_event_sub_rank(
-                user_id=send.claimed_sub_user_id,
-                event_key=send.event_key,
-            )
-            if send.claimed_sub_user_id is not None
-            else None
-        )
-        domme_totals = await self.database.get_event_domme_total(
+        domme_label = domme.mention if domme is not None else f"<@{domme_user_id}>"
+        domme_nickname = self._member_nickname(domme, fallback="Unknown Domme")
+        sender_name = (send.sub_name or "").strip()
+        sender_name_cf = sender_name.casefold()
+        sender_is_anonymous = not sender_name
+        sender_is_test_name = sender_name_cf in {"marie_123", "rob test send"}
+
+        if sender_is_anonymous:
+            sub_label = "*👻 The Flying Dutchman*"
+        elif sender_is_test_name:
+            sub_label = "Rob's Testy Westy Notification"
+        elif send.claimed_sub_user_id is None or sub_member is None:
+            sub_label = "*Sub with no nickname claimed*"
+        else:
+            sub_label = sub_member.mention
+
+        domme_rank = await self.database.get_event_domme_rank(
             user_id=domme_user_id,
             event_key=send.event_key,
         )
+        domme_rank_value = domme_rank if domme_rank is not None else "?"
+        domme_rank_line = f"{domme_label}'s rank after this send #{domme_rank_value}"
 
-        sub_label = sub_member.mention if sub_member is not None else (send.sub_name or "Unclaimed Send")
-        domme_label = domme.mention if domme is not None else f"<@{domme_user_id}>"
+        sub_rank_line: str | None = None
+        sub_total_line: str | None = None
+        anonymous_rank_line: str | None = None
+        if send.claimed_sub_user_id is not None and sub_member is not None:
+            sub_rank = await self.database.get_event_sub_rank(
+                user_id=send.claimed_sub_user_id,
+                event_key=send.event_key,
+            )
+            sub_rank_value = sub_rank if sub_rank is not None else "?"
+            sub_total = await self.database.get_event_sub_total(
+                user_id=send.claimed_sub_user_id,
+                event_key=send.event_key,
+            )
+            sub_rank_line = f"{sub_member.mention}'s rank after this send #{sub_rank_value}"
+            sub_total_line = (
+                f"Total amount sent by sub to date: {format_money(sub_total.total_usd)} "
+                "(United States Dollar)"
+            )
+        elif sender_is_anonymous:
+            dutchman_rank = await self.database.get_event_unclaimed_rank(
+                sub_name=None,
+                event_key=send.event_key,
+            )
+            dutchman_rank_value = dutchman_rank if dutchman_rank is not None else "?"
+            anonymous_rank_line = f"The Flying Dutchmans Rank: #{dutchman_rank_value}"
+
         amount_label = format_money(send.amount_usd) if not send.is_private else "Unknown"
-        title = "🎉 Rob | Events | Send"
+        title = f"💸 New Send to {domme_nickname}! 💸"
         accent_color = theme.accent_color if theme is not None else discord.Colour.green()
-        rank_label = "Event sub rank" if send.event_key else "Live sub rank"
+        footer = f"Please enjoy this send equally | {format_timestamp(send.sent_at)}"
+        send_public_id = self._public_send_id(send_id=send.id, domme_user_id=domme_user_id, sent_at=send.sent_at)
 
         try:
             await channel.send(
@@ -797,13 +833,15 @@ class ThroneTrackerCog(commands.Cog):
                     title=title,
                     accent_color=accent_color,
                     sub_label=sub_label,
-                    domme_label=domme_label,
                     amount_label=amount_label,
                     item_name=send.item_name,
                     item_image_url=send.item_image_url,
-                    sub_rank=sub_rank,
-                    domme_send_count=domme_totals.send_count,
-                    rank_label=rank_label,
+                    send_public_id=send_public_id,
+                    domme_rank_line=domme_rank_line,
+                    sub_rank_line=sub_rank_line,
+                    sub_total_line=sub_total_line,
+                    anonymous_rank_line=anonymous_rank_line,
+                    footer=footer,
                 )
             )
         except discord.HTTPException:
@@ -813,6 +851,28 @@ class ThroneTrackerCog(commands.Cog):
                 send_id,
                 self.config.send_track_channel_id,
             )
+
+    @staticmethod
+    def _member_nickname(
+        member: discord.Member | discord.User | None,
+        *,
+        fallback: str,
+    ) -> str:
+        if member is None:
+            return fallback
+        display_name = getattr(member, "display_name", None)
+        if isinstance(display_name, str) and display_name.strip():
+            return display_name
+        name = getattr(member, "name", None)
+        if isinstance(name, str) and name.strip():
+            return name
+        return fallback
+
+    @staticmethod
+    def _public_send_id(*, send_id: int, domme_user_id: int, sent_at: str) -> str:
+        seed = f"{send_id}:{domme_user_id}:{sent_at}".encode("utf-8")
+        digest = hashlib.blake2s(seed, digest_size=4).hexdigest().upper()
+        return f"ROB-{send_id:06d}-{digest}"
 
     def slow_retry_count(self) -> int:
         active = [domme_id for domme_id in list(self._slow_retry_until) if self._is_in_slow_retry(domme_id)]
