@@ -18,7 +18,7 @@ import discord
 from discord.ext import commands, tasks
 
 from bot.config import BotConfig
-from bot.database import Database, EventDommeRegistration
+from bot.database import Database, EventDommeRegistration, ThroneWishlistItem
 from bot.event_views import (
     SendNotificationView,
     ThroneRefreshView,
@@ -27,7 +27,7 @@ from bot.event_views import (
     format_timestamp,
 )
 from bot.ui.components import action_section, make_container, separator, simple_view, text_block
-from bot.throne_scraper import fetch_recent_sends_with_status, normalize_throne_url
+from bot.throne_scraper import fetch_public_wishlist_items, fetch_recent_sends_with_status, normalize_throne_url
 from bot.utils import has_admin_command_permissions, normalize_sender_name
 
 log = logging.getLogger(__name__)
@@ -188,12 +188,13 @@ class ThroneTrackerCog(commands.Cog):
         self._last_successful_poll_at: str | None = None
         self._last_manual_refresh_at: str | None = None
         self._last_error: str | None = None
-
-        self.poll_throne_pages.change_interval(seconds=config.throne_poll_interval_seconds)
-        self.poll_throne_pages.start()
+        self.sync_wishlist_snapshots.start()
 
     def cog_unload(self) -> None:
-        self.poll_throne_pages.cancel()
+        if self.poll_throne_pages.is_running():
+            self.poll_throne_pages.cancel()
+        if self.sync_wishlist_snapshots.is_running():
+            self.sync_wishlist_snapshots.cancel()
         if self._http is not None:
             session = self._http
             self._http = None
@@ -222,6 +223,19 @@ class ThroneTrackerCog(commands.Cog):
     async def _before_poll(self) -> None:
         await self.bot.wait_until_ready()
 
+    @tasks.loop(hours=2)
+    async def sync_wishlist_snapshots(self) -> None:
+        try:
+            synced = await self._run_wishlist_snapshot_sync()
+            if synced:
+                log.info("Wishlist snapshot sync refreshed %s creator(s).", synced)
+        except Exception:  # noqa: BLE001
+            log.exception("Wishlist snapshot sync raised; keeping the loop alive.")
+
+    @sync_wishlist_snapshots.before_loop
+    async def _before_wishlist_sync(self) -> None:
+        await self.bot.wait_until_ready()
+
     @commands.group(name="throne", invoke_without_command=True)
     async def throne_group(self, ctx: commands.Context[commands.Bot]) -> None:
         await ctx.reply(
@@ -235,23 +249,26 @@ class ThroneTrackerCog(commands.Cog):
         if not await self._check_admin_context(ctx):
             return
 
-        result = await self.run_manual_refresh()
         event_cog = self.bot.get_cog("RobEventCog")
         context = await event_cog.get_runtime_context() if event_cog is not None else None
-        tracking_mode = self._refresh_mode_label(context)
-        detail = (
-            "Manual refresh complete."
-            if result.ran
-            else "A poll is already running. Rob is not doing two at once."
-        )
         await ctx.reply(
-            view=ThroneRefreshView(
-                ran=result.ran,
-                detail=detail,
-                new_sends_found=result.new_sends_found,
-                tracking_mode=tracking_mode,
-                slow_retry_count=self.slow_retry_count(),
-                page_cooldown_count=self.page_enrichment_cooldown_count(),
+            view=self._simple_admin_view(
+                "👑 Rob | Throne Admin | Refresh",
+                sections=[
+                    text_block("Legacy polling is disabled."),
+                    separator(),
+                    text_block(
+                        "**Tracking mode**\n"
+                        f"{self._refresh_mode_label(context)}"
+                    ),
+                    separator(),
+                    text_block(
+                        "**What to do now**\n"
+                        "Use Throne webhooks and click **Test Webhook** after pasting the URL."
+                    ),
+                ],
+                footer="Webhook-only now. Rob retired the scraping mop.",
+                accent_color=_EMBED_COLOR_ADMIN,
             ),
             mention_author=False,
         )
@@ -267,13 +284,9 @@ class ThroneTrackerCog(commands.Cog):
 
         creators = await self.database.get_throne_creators_for_guild(guild_id=str(ctx.guild.id))
         total_count = len(creators)
-        webhook_count = sum(1 for creator in creators if creator.tracking_mode == "webhook")
-        inactive_count = total_count - webhook_count
-        tracking_method = "Legacy"
-        if webhook_count and inactive_count:
-            tracking_method = "Mixed (webhook + legacy)"
-        elif webhook_count:
-            tracking_method = "Webhook"
+        webhook_count = sum(1 for creator in creators if creator.webhook_connected_at)
+        pending_count = total_count - webhook_count
+        tracking_method = "Webhook only"
 
         latest = await self.database.get_latest_webhook_send_for_guild(guild_id=str(ctx.guild.id))
         if latest is None:
@@ -292,9 +305,9 @@ class ThroneTrackerCog(commands.Cog):
                     separator(),
                     text_block(f"**Registered Users**\n{total_count}"),
                     separator(),
-                    text_block(f"**Webhook Active**\n{webhook_count}"),
+                    text_block(f"**Webhook Connected**\n{webhook_count}"),
                     separator(),
-                    text_block(f"**Disabled / Inactive Webhook**\n{inactive_count}"),
+                    text_block(f"**Waiting For First Webhook**\n{pending_count}"),
                     separator(),
                     text_block(
                         "**Last Successful Send Notification**\n"
@@ -335,7 +348,7 @@ class ThroneTrackerCog(commands.Cog):
             sections: list[discord.ui.Item] = []
             for creator_index, creator in enumerate(page):
                 user_label = await self._member_display_label(ctx.guild, int(creator.discord_user_id))
-                status = "🟢 Active" if creator.tracking_mode == "webhook" else "⚪ Disabled"
+                status = "🟢 Connected" if creator.webhook_connected_at else "🟡 Waiting for first webhook"
                 if creator.last_successful_event_at:
                     status = f"{status} · last event {format_relative_timestamp(creator.last_successful_event_at)}"
                 if creator_index:
@@ -409,7 +422,7 @@ class ThroneTrackerCog(commands.Cog):
             send_from = latest_send.sub_name or "Unknown"
             send_amount = "Unknown" if latest_send.is_private else format_money(latest_send.amount_usd)
 
-        webhook_status = "🟢 Active" if creator.tracking_mode == "webhook" else "⚪ Disabled"
+        webhook_status = "🟢 Connected" if creator.webhook_connected_at else "🟡 Waiting for first webhook"
         connected_at = format_timestamp(creator.webhook_connected_at) if creator.webhook_connected_at else "Never"
         user_label = await self._member_display_label(ctx.guild, user_id)
         await ctx.reply(
@@ -821,8 +834,8 @@ class ThroneTrackerCog(commands.Cog):
         if context is not None and getattr(context, "is_event_active", False):
             active_event = getattr(context, "active_event", None)
             if active_event is not None:
-                return f"{active_event.name} — active"
-        return "Live"
+                return f"{active_event.name} — webhook only"
+        return "Webhook only"
 
     @staticmethod
     def _current_event_label(context: object | None) -> str:
@@ -831,3 +844,41 @@ class ThroneTrackerCog(commands.Cog):
             if active_event is not None:
                 return f"{active_event.name} — active"
         return "Not active. Live mode."
+
+    async def _run_wishlist_snapshot_sync(self) -> int:
+        if not self.config.guild_id:
+            return 0
+
+        creators = await self.database.get_throne_creators_for_guild(guild_id=str(self.config.guild_id))
+        if not creators:
+            return 0
+
+        http = await self._get_http()
+        now_str = datetime.now(timezone.utc).isoformat()
+        synced = 0
+        for creator in creators:
+            items = await fetch_public_wishlist_items(
+                creator.throne_creator_id,
+                http=http,
+                timeout_seconds=self.config.throne_http_timeout_seconds,
+            )
+            if items is None:
+                continue
+            await self.database.replace_throne_wishlist_items(
+                creator_id=creator.throne_creator_id,
+                items=[
+                    ThroneWishlistItem(
+                        creator_id=creator.throne_creator_id,
+                        wishlist_item_id=item.wishlist_item_id,
+                        item_name=item.item_name,
+                        item_image_url=item.item_image_url,
+                        amount_usd=item.amount_usd,
+                        currency=item.currency,
+                        is_available=item.is_available,
+                        last_seen_at=now_str,
+                    )
+                    for item in items
+                ],
+            )
+            synced += 1
+        return synced

@@ -15,7 +15,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot.config import BotConfig
-from bot.database import Database, EventState, SendSummary
+from bot.database import Database, EventState, SendSummary, ThroneWishlistItem
 from bot.event_config import ConfiguredEvent, EventTheme, EventsConfig, load_events_config
 from bot.event_views import (
     DommeSignupModal,
@@ -28,7 +28,7 @@ from bot.event_views import (
     format_timestamp,
 )
 from bot.throne_scraper import (
-    has_overlay_data,
+    fetch_public_wishlist_items,
     normalize_throne_registration_input,
     resolve_creator_id,
     resolve_creator_info,
@@ -444,13 +444,6 @@ class RobEventCog(commands.Cog):
             )
             return
 
-        # Probe overlays to detect Stream Alerts connectivity.
-        overlay_exists = await has_overlay_data(
-            creator_info.creator_id,
-            http=http,
-            timeout_seconds=self.config.throne_http_timeout_seconds,
-        )
-
         # Determine guild_id (may be None in DMs, but signup requires a guild).
         guild_id = str(interaction.guild_id) if interaction.guild_id else "0"
         discord_user_id = str(interaction.user.id)
@@ -465,16 +458,13 @@ class RobEventCog(commands.Cog):
         else:
             webhook_secret = secrets.token_urlsafe(32)
 
-        # Determine tracking mode: keep 'webhook' if already connected, else
-        # 'overlay' if overlays exist, else 'disabled'.
+        # Webhook-only flow: keep connected creators as webhook, otherwise wait
+        # for the user's first successful webhook event / test.
         if existing is not None and existing.tracking_mode == "webhook":
             tracking_mode = "webhook"
-        elif overlay_exists:
-            tracking_mode = "overlay"
         else:
             tracking_mode = "disabled"
 
-        now_str = datetime.now(timezone.utc).isoformat()
         throne_creator = await self.database.upsert_throne_creator(
             guild_id=guild_id,
             discord_user_id=discord_user_id,
@@ -483,9 +473,33 @@ class RobEventCog(commands.Cog):
             hide_own_purchases=creator_info.hide_own_purchases,
             tracking_mode=tracking_mode,
             webhook_secret=webhook_secret,
-            overlay_detected=overlay_exists,
-            last_overlay_check_at=now_str,
+            overlay_detected=False,
+            last_overlay_check_at=None,
         )
+
+        wishlist_items = await fetch_public_wishlist_items(
+            creator_info.creator_id,
+            http=http,
+            timeout_seconds=self.config.throne_http_timeout_seconds,
+        )
+        if wishlist_items is not None:
+            now_str = datetime.now(timezone.utc).isoformat()
+            await self.database.replace_throne_wishlist_items(
+                creator_id=creator_info.creator_id,
+                items=[
+                    ThroneWishlistItem(
+                        creator_id=creator_info.creator_id,
+                        wishlist_item_id=item.wishlist_item_id,
+                        item_name=item.item_name,
+                        item_image_url=item.item_image_url,
+                        amount_usd=item.amount_usd,
+                        currency=item.currency,
+                        is_available=item.is_available,
+                        last_seen_at=now_str,
+                    )
+                    for item in wishlist_items
+                ],
+            )
 
         # Save to event_dommes as before (keeps leaderboard / existing flows working).
         await self.database.save_event_domme(user_id=interaction.user.id, throne_url=normalized)
@@ -500,9 +514,8 @@ class RobEventCog(commands.Cog):
 
         # Compose ephemeral reply.
         mode_labels = {
-            "webhook": "🟢 Webhook (real-time)",
-            "overlay": "🟡 Stream Alerts overlay (polled)",
-            "disabled": "⚪ Not connected — see setup instructions below",
+            "webhook": "🟢 Webhook connected",
+            "disabled": "🟡 Waiting for webhook setup",
         }
         mode_label = mode_labels.get(tracking_mode, tracking_mode)
 
@@ -512,30 +525,18 @@ class RobEventCog(commands.Cog):
         ]
 
         if tracking_mode == "disabled":
-            lines.append(
-                "\nNeither webhooks nor Stream Alerts are detected. "
-                "To enable tracking, either:"
-            )
             if webhook_url:
                 lines.append(
-                    f"• **Webhook (recommended):** Go to Throne → Settings → Integrations → Webhooks "
-                    f"and add:\n`{webhook_url}`"
+                    "\nGo to **Throne → Settings → Integrations → Webhooks**, paste this URL, "
+                    "save it, then click **Test Webhook**:"
                 )
+                lines.append(f"`{webhook_url}`")
             else:
                 lines.append(
-                    "• **Webhook (recommended):** Ask the server admin for the webhook URL, "
-                    "then go to Throne → Settings → Integrations → Webhooks."
+                    "\nWebhook tracking is ready on Rob's side, but `THRONE_WEBHOOK_BASE_URL` "
+                    "is not configured yet, so there is no URL to paste into Throne."
                 )
-            lines.append(
-                "• **Stream Alerts:** Enable Stream Alerts in Throne and Rob will detect them automatically."
-            )
-        elif tracking_mode == "overlay":
-            if webhook_url:
-                lines.append(
-                    f"\n💡 Upgrade to real-time webhooks: go to Throne → Settings → Integrations → Webhooks "
-                    f"and add:\n`{webhook_url}`"
-                )
-        elif tracking_mode == "webhook" and webhook_url:
+        elif webhook_url:
             lines.append(f"\n**Webhook URL:** `{webhook_url}`")
 
         await interaction.response.send_message(

@@ -46,6 +46,31 @@ class ThroneCreator:
 
 
 @dataclass(frozen=True)
+class ThroneWishlistItem:
+    creator_id: str
+    wishlist_item_id: str
+    item_name: str | None
+    item_image_url: str | None
+    amount_usd: float
+    currency: str | None
+    is_available: bool | None
+    last_seen_at: str
+
+    @classmethod
+    def from_row(cls, row: aiosqlite.Row) -> "ThroneWishlistItem":
+        return cls(
+            creator_id=str(row["creator_id"]),
+            wishlist_item_id=str(row["wishlist_item_id"]),
+            item_name=row["item_name"],
+            item_image_url=row["item_image_url"],
+            amount_usd=float(row["amount_usd"]),
+            currency=row["currency"],
+            is_available=bool(row["is_available"]) if row["is_available"] is not None else None,
+            last_seen_at=str(row["last_seen_at"]),
+        )
+
+
+@dataclass(frozen=True)
 class ThroneWebhookSend:
     discord_user_id: str
     sub_name: str | None
@@ -291,6 +316,22 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_throne_creators_creator_id
             ON throne_creators(throne_creator_id);
+
+            CREATE TABLE IF NOT EXISTS throne_wishlist_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                creator_id TEXT NOT NULL,
+                wishlist_item_id TEXT NOT NULL,
+                item_name TEXT,
+                item_image_url TEXT,
+                amount_usd REAL NOT NULL,
+                currency TEXT,
+                is_available INTEGER,
+                last_seen_at TEXT NOT NULL,
+                UNIQUE(creator_id, wishlist_item_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_throne_wishlist_items_creator
+            ON throne_wishlist_items(creator_id);
 
             CREATE TABLE IF NOT EXISTS bot_config (
                 key TEXT PRIMARY KEY,
@@ -1040,6 +1081,79 @@ class Database:
         ) as cursor:
             rows = await cursor.fetchall()
         return [ThroneCreator.from_row(r) for r in rows]
+
+    async def replace_throne_wishlist_items(
+        self,
+        *,
+        creator_id: str,
+        items: list[ThroneWishlistItem],
+    ) -> None:
+        await self.connection.executemany(
+            """
+            INSERT INTO throne_wishlist_items (
+                creator_id,
+                wishlist_item_id,
+                item_name,
+                item_image_url,
+                amount_usd,
+                currency,
+                is_available,
+                last_seen_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(creator_id, wishlist_item_id) DO UPDATE SET
+                item_name = excluded.item_name,
+                item_image_url = excluded.item_image_url,
+                amount_usd = excluded.amount_usd,
+                currency = excluded.currency,
+                is_available = excluded.is_available,
+                last_seen_at = excluded.last_seen_at
+            """,
+            [
+                (
+                    creator_id,
+                    item.wishlist_item_id,
+                    item.item_name,
+                    item.item_image_url,
+                    item.amount_usd,
+                    item.currency,
+                    int(bool(item.is_available)) if item.is_available is not None else None,
+                    item.last_seen_at,
+                )
+                for item in items
+            ],
+        )
+
+        if items:
+            placeholders = ",".join("?" for _ in items)
+            await self.connection.execute(
+                f"""
+                DELETE FROM throne_wishlist_items
+                WHERE creator_id = ?
+                AND wishlist_item_id NOT IN ({placeholders})
+                """,
+                (creator_id, *(item.wishlist_item_id for item in items)),
+            )
+        else:
+            await self.connection.execute(
+                "DELETE FROM throne_wishlist_items WHERE creator_id = ?",
+                (creator_id,),
+            )
+
+        await self.connection.commit()
+
+    async def get_throne_wishlist_items(self, *, creator_id: str) -> list[ThroneWishlistItem]:
+        async with self.connection.execute(
+            """
+            SELECT creator_id, wishlist_item_id, item_name, item_image_url, amount_usd, currency, is_available, last_seen_at
+            FROM throne_wishlist_items
+            WHERE creator_id = ?
+            ORDER BY item_name COLLATE NOCASE ASC, wishlist_item_id ASC
+            """,
+            (creator_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [ThroneWishlistItem.from_row(row) for row in rows]
 
     async def get_throne_creator_by_discord_user(
         self, *, guild_id: str, discord_user_id: str

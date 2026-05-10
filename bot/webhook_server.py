@@ -19,10 +19,12 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
 from aiohttp import web
 
 from bot.config import BotConfig
-from bot.database import Database
+from bot.database import Database, ThroneWishlistItem
+from bot.throne_scraper import WishlistItemRecord, fetch_public_wishlist_items, match_wishlist_item_price
 from bot.utils import normalize_sender_name
 
 if TYPE_CHECKING:
@@ -352,6 +354,7 @@ class ThroneWebhookServer:
         self.bot = bot
         self.config = config
         self.database = database
+        self._http: aiohttp.ClientSession | None = None
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
 
@@ -390,11 +393,19 @@ class ThroneWebhookServer:
             )
 
     async def stop(self) -> None:
+        if self._http is not None:
+            await self._http.close()
+            self._http = None
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
             self._site = None
             log.info("Throne webhook server stopped.")
+
+    async def _get_http(self) -> aiohttp.ClientSession:
+        if self._http is None or self._http.closed:
+            self._http = aiohttp.ClientSession()
+        return self._http
 
     async def _handle_health(self, request: web.Request) -> web.Response:
         return web.Response(text="OK")
@@ -513,8 +524,71 @@ class ThroneWebhookServer:
             )
 
         domme_user_id = int(matched_row.discord_user_id)
-        amount_usd = fields["amount_usd"] if fields["amount_usd"] is not None else 0.0
+        amount_usd: float | None = fields["amount_usd"]
         is_private = fields["is_private"]
+
+        if event_type == "gift_purchased":
+            amount_usd = None
+            is_private = True
+            cached_items = await self.database.get_throne_wishlist_items(creator_id=creator_id)
+            cached_price = match_wishlist_item_price(
+                [
+                    WishlistItemRecord(
+                        wishlist_item_id=item.wishlist_item_id,
+                        item_name=item.item_name,
+                        item_image_url=item.item_image_url,
+                        amount_usd=item.amount_usd,
+                        currency=item.currency,
+                        is_available=item.is_available,
+                    )
+                    for item in cached_items
+                ],
+                item_name=fields["item_name"],
+                item_image_url=fields["item_image_url"],
+            )
+            if cached_price is not None:
+                amount_usd = cached_price.amount_usd
+                is_private = False
+            else:
+                live_items = await fetch_public_wishlist_items(
+                    creator_id,
+                    http=await self._get_http(),
+                    timeout_seconds=self.config.throne_http_timeout_seconds,
+                )
+                if live_items is not None:
+                    now_str = _utc_now()
+                    await self.database.replace_throne_wishlist_items(
+                        creator_id=creator_id,
+                        items=[
+                            ThroneWishlistItem(
+                                creator_id=creator_id,
+                                wishlist_item_id=item.wishlist_item_id,
+                                item_name=item.item_name,
+                                item_image_url=item.item_image_url,
+                                amount_usd=item.amount_usd,
+                                currency=item.currency,
+                                is_available=item.is_available,
+                                last_seen_at=now_str,
+                            )
+                            for item in live_items
+                        ],
+                    )
+                    live_price = match_wishlist_item_price(
+                        live_items,
+                        item_name=fields["item_name"],
+                        item_image_url=fields["item_image_url"],
+                    )
+                    if live_price is not None:
+                        amount_usd = live_price.amount_usd
+                        is_private = False
+                if amount_usd is None:
+                    log.info(
+                        "Webhook gift_purchased for creator %s could not be enriched with a cached or live public wishlist price.",
+                        creator_id,
+                    )
+
+        if amount_usd is None:
+            amount_usd = 0.0
 
         # Determine active event key.
         event_cog = self.bot.get_cog("RobEventCog")

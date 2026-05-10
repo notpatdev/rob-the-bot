@@ -67,6 +67,22 @@ class RecentSendsFetchResult:
     page_status: str
 
 
+@dataclass(frozen=True)
+class WishlistItemPrice:
+    amount_usd: float
+    currency: str | None
+
+
+@dataclass(frozen=True)
+class WishlistItemRecord:
+    wishlist_item_id: str
+    item_name: str | None
+    item_image_url: str | None
+    amount_usd: float
+    currency: str | None
+    is_available: bool | None
+
+
 _NEXT_DATA_RE = re.compile(
     r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>',
     re.DOTALL,
@@ -233,6 +249,139 @@ async def has_overlay_data(
     """Return True if the creator has any overlay documents in Firestore."""
     documents = await _query_overlay_documents(creator_id, http=http, timeout_seconds=timeout_seconds)
     return bool(documents)
+
+
+async def fetch_wishlist_item_price(
+    creator_id: str,
+    *,
+    item_name: str | None,
+    item_image_url: str | None,
+    http: aiohttp.ClientSession,
+    timeout_seconds: float = 10.0,
+    page_size: int = 100,
+    max_pages: int = 5,
+) -> WishlistItemPrice | None:
+    items = await fetch_public_wishlist_items(
+        creator_id,
+        http=http,
+        timeout_seconds=timeout_seconds,
+        page_size=page_size,
+        max_pages=max_pages,
+    )
+    if items is None:
+        return None
+    return match_wishlist_item_price(
+        items,
+        item_name=item_name,
+        item_image_url=item_image_url,
+    )
+
+
+async def fetch_public_wishlist_items(
+    creator_id: str,
+    *,
+    http: aiohttp.ClientSession,
+    timeout_seconds: float = 10.0,
+    page_size: int = 100,
+    max_pages: int = 5,
+) -> list[WishlistItemRecord] | None:
+    """Look up a creator's public wishlist items and best-match a purchased gift.
+    """
+    if not creator_id:
+        return None
+
+    next_page_token: str | None = None
+    results: list[WishlistItemRecord] = []
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+
+    for _ in range(max_pages):
+        params = {"pageSize": str(page_size)}
+        if next_page_token:
+            params["pageToken"] = next_page_token
+
+        url = (
+            f"{_FIRESTORE_DOCUMENTS_URL}/creators/{quote(creator_id, safe='')}/wishlistItems"
+        )
+        try:
+            async with http.get(url, params=params, timeout=timeout) as resp:
+                if resp.status == 404:
+                    return None
+                if resp.status != 200:
+                    text = await resp.text()
+                    log.warning(
+                        "Wishlist item lookup for creator %s returned HTTP %s: %s",
+                        creator_id,
+                        resp.status,
+                        text[:300],
+                    )
+                    return None
+                data = await resp.json()
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            log.warning("Failed to fetch public wishlist items for creator %s: %s", creator_id, exc)
+            return None
+
+        documents = data.get("documents", [])
+        if not isinstance(documents, list):
+            documents = []
+
+        for document in documents:
+            if not isinstance(document, dict):
+                continue
+            fields = _firestore_fields_to_python(document.get("fields"))
+            price = _coerce_wishlist_item_price(fields.get("price"))
+            if price is None:
+                continue
+            wishlist_item_id = _coerce_str(fields.get("id")) or _document_id(document)
+            if wishlist_item_id is None:
+                continue
+            results.append(
+                WishlistItemRecord(
+                    wishlist_item_id=wishlist_item_id,
+                    item_name=_coerce_str(fields.get("name")),
+                    item_image_url=_coerce_str(fields.get("imgLink")) or _coerce_str(fields.get("imageUrl")),
+                    amount_usd=price,
+                    currency=_coerce_str(fields.get("currency")),
+                    is_available=_coerce_bool(fields.get("isAvailable")),
+                )
+            )
+
+        next_page_token = data.get("nextPageToken")
+        if not next_page_token:
+            break
+
+    return results
+
+
+def match_wishlist_item_price(
+    items: list[WishlistItemRecord],
+    *,
+    item_name: str | None,
+    item_image_url: str | None,
+) -> WishlistItemPrice | None:
+    wanted_name = _normalize_match_text(item_name)
+    wanted_image = _normalize_image_key(item_image_url)
+    if wanted_name is None and wanted_image is None:
+        return None
+
+    best_score = -1
+    best_match: WishlistItemPrice | None = None
+    for item in items:
+        score = _wishlist_item_match_score(
+            wanted_name=wanted_name,
+            wanted_image=wanted_image,
+            candidate_name=item.item_name,
+            candidate_image=item.item_image_url,
+        )
+        if score > best_score:
+            best_score = score
+            best_match = WishlistItemPrice(
+                amount_usd=item.amount_usd,
+                currency=item.currency,
+            )
+
+    if best_score <= 0:
+        return None
+    return best_match
 
 
 async def fetch_recent_sends(
@@ -418,6 +567,32 @@ def _merge_overlay_and_page_sends(
         )
 
     return enriched
+
+
+def _wishlist_item_match_score(
+    *,
+    wanted_name: str | None,
+    wanted_image: str | None,
+    candidate_name: str | None,
+    candidate_image: str | None,
+) -> int:
+    score = 0
+
+    normalized_candidate_name = _normalize_match_text(candidate_name)
+    if wanted_name and normalized_candidate_name:
+        if wanted_name == normalized_candidate_name:
+            score += 4
+        elif wanted_name in normalized_candidate_name or normalized_candidate_name in wanted_name:
+            score += 2
+
+    normalized_candidate_image = _normalize_image_key(candidate_image)
+    if wanted_image and normalized_candidate_image:
+        if wanted_image == normalized_candidate_image:
+            score += 4
+        elif wanted_image.rsplit("/", 1)[-1] == normalized_candidate_image.rsplit("/", 1)[-1]:
+            score += 3
+
+    return score
 
 
 def _send_match_score(left: ScrapedSend, right: ScrapedSend) -> int:
@@ -932,6 +1107,52 @@ def _coerce_amount(value: Any) -> float | None:
     # raw value is an int and >= 1000 it's almost certainly cents (a $10+ tip).
     # We can't be 100% sure, so leave as-is; downstream only formats the value.
     return amount
+
+
+def _coerce_wishlist_item_price(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return max(value, 0) / 100.0
+    if isinstance(value, float):
+        return max(value, 0.0)
+    if isinstance(value, str):
+        cleaned = value.strip().replace("$", "").replace(",", "")
+        if not cleaned:
+            return None
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _normalize_match_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(value.casefold().split())
+    return normalized or None
+
+
+def _normalize_image_key(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return value.casefold()
+    if parsed.scheme and parsed.netloc:
+        path = parsed.path or ""
+        return f"{parsed.netloc.casefold()}{path}"
+    return value.casefold()
 
 
 def _normalize_timestamp(value: Any) -> str | None:

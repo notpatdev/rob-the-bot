@@ -386,7 +386,7 @@ def build_help_pages(
                     ROB_GREY.value,
                     "Admin bits. Button wrench included.",
                     (
-                        ("!throne refresh", "Run one manual Throne poll right now."),
+                        ("!throne refresh", "Show the webhook-only tracking reminder."),
                         ("!throne status", "Show Throne registration and webhook tracking health."),
                         ("!throne list", "List registered Throne users and webhook status."),
                         ("!throne search <@user|id>", "Show one Throne creator record."),
