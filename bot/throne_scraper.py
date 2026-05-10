@@ -363,25 +363,100 @@ def match_wishlist_item_price(
     if wanted_name is None and wanted_image is None:
         return None
 
-    best_score = -1
-    best_match: WishlistItemPrice | None = None
-    for item in items:
-        score = _wishlist_item_match_score(
-            wanted_name=wanted_name,
-            wanted_image=wanted_image,
-            candidate_name=item.item_name,
-            candidate_image=item.item_image_url,
-        )
-        if score > best_score:
-            best_score = score
-            best_match = WishlistItemPrice(
-                amount_usd=item.amount_usd,
-                currency=item.currency,
-            )
+    if wanted_image is not None:
+        exact_image_matches = [
+            item
+            for item in items
+            if _image_match_strength(wanted_image, item.item_image_url) == 2
+        ]
+        if exact_image_matches:
+            return _pick_wishlist_price_candidate(exact_image_matches, wanted_name=wanted_name)
 
-    if best_score <= 0:
+        loose_image_matches = [
+            item
+            for item in items
+            if _image_match_strength(wanted_image, item.item_image_url) == 1
+        ]
+        if loose_image_matches:
+            return _pick_wishlist_price_candidate(loose_image_matches, wanted_name=wanted_name)
+
+    if wanted_name is not None:
+        exact_name_matches = [
+            item
+            for item in items
+            if _normalize_match_text(item.item_name) == wanted_name
+        ]
+        if len(exact_name_matches) == 1:
+            return _wishlist_item_price_from_record(exact_name_matches[0])
+        if len(exact_name_matches) > 1:
+            return None
+
+        partial_name_matches = [
+            item
+            for item in items
+            if (
+                (candidate_name := _normalize_match_text(item.item_name)) is not None
+                and (wanted_name in candidate_name or candidate_name in wanted_name)
+            )
+        ]
+        if len(partial_name_matches) == 1:
+            return _wishlist_item_price_from_record(partial_name_matches[0])
+        if len(partial_name_matches) > 1:
+            return None
+
+    scored_candidates = [
+        (
+            _wishlist_item_match_score(
+                wanted_name=wanted_name,
+                wanted_image=wanted_image,
+                candidate_name=item.item_name,
+                candidate_image=item.item_image_url,
+            ),
+            item,
+        )
+        for item in items
+    ]
+    scored_candidates = [(score, item) for score, item in scored_candidates if score > 0]
+    if not scored_candidates:
         return None
-    return best_match
+
+    scored_candidates.sort(key=lambda pair: pair[0], reverse=True)
+    top_score = scored_candidates[0][0]
+    top_items = [item for score, item in scored_candidates if score == top_score]
+    if len(top_items) != 1:
+        return None
+    return _wishlist_item_price_from_record(top_items[0])
+
+
+def _pick_wishlist_price_candidate(
+    items: list[WishlistItemRecord],
+    *,
+    wanted_name: str | None,
+) -> WishlistItemPrice | None:
+    if not items:
+        return None
+    if len(items) == 1:
+        return _wishlist_item_price_from_record(items[0])
+
+    if wanted_name is not None:
+        exact_name_matches = [
+            item
+            for item in items
+            if _normalize_match_text(item.item_name) == wanted_name
+        ]
+        if len(exact_name_matches) == 1:
+            return _wishlist_item_price_from_record(exact_name_matches[0])
+        if len(exact_name_matches) > 1:
+            return None
+
+    return None
+
+
+def _wishlist_item_price_from_record(item: WishlistItemRecord) -> WishlistItemPrice:
+    return WishlistItemPrice(
+        amount_usd=item.amount_usd,
+        currency=item.currency,
+    )
 
 
 async def fetch_recent_sends(
@@ -593,6 +668,20 @@ def _wishlist_item_match_score(
             score += 3
 
     return score
+
+
+def _image_match_strength(
+    wanted_image: str,
+    candidate_image: str | None,
+) -> int:
+    normalized_candidate_image = _normalize_image_key(candidate_image)
+    if normalized_candidate_image is None:
+        return 0
+    if wanted_image == normalized_candidate_image:
+        return 2
+    if wanted_image.rsplit("/", 1)[-1] == normalized_candidate_image.rsplit("/", 1)[-1]:
+        return 1
+    return 0
 
 
 def _send_match_score(left: ScrapedSend, right: ScrapedSend) -> int:
