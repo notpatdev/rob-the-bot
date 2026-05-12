@@ -53,6 +53,32 @@ class RobBot(commands.Bot):
             synced = await self.tree.sync()
             logging.info("Synced %s global command(s).", len(synced))
 
+        async def _global_blacklist_interaction_check(
+            interaction: discord.Interaction,
+        ) -> bool:
+            if interaction.user is None:
+                return True
+            blocked = await self.database.is_user_blacklisted(
+                discord_user_id=str(interaction.user.id)
+            )
+            if blocked:
+                await send_deny_response(interaction)
+                return False
+            return True
+
+        self.tree.interaction_check = _global_blacklist_interaction_check
+
+        async def _global_blacklist_prefix_check(ctx: commands.Context) -> bool:
+            blocked = await self.database.is_user_blacklisted(
+                discord_user_id=str(ctx.author.id)
+            )
+            if blocked:
+                await send_deny_response(ctx)
+                return False
+            return True
+
+        self.add_check(_global_blacklist_prefix_check)
+
     async def on_ready(self) -> None:
         logging.info("%s is online as %s.", self.config.bot_name, self.user)
         if self._webhook_server is None:
