@@ -283,6 +283,13 @@ class Database:
                 event_key TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS rob_blacklist (
+                discord_user_id TEXT PRIMARY KEY,
+                reason TEXT,
+                created_at TEXT NOT NULL,
+                created_by TEXT
+            );
+
             CREATE UNIQUE INDEX IF NOT EXISTS idx_event_sends_external_id
             ON event_sends(external_id)
             WHERE external_id IS NOT NULL;
@@ -1362,3 +1369,64 @@ class Database:
             (webhook_connected_at, last_successful_event_at, now, creator_id),
         )
         await self.connection.commit()
+
+
+    async def add_to_blacklist(
+        self,
+        *,
+        discord_user_id: str,
+        reason: str | None = None,
+        created_by: str | None = None,
+    ) -> None:
+        await self.connection.execute(
+            """
+            INSERT INTO rob_blacklist (discord_user_id, reason, created_at, created_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(discord_user_id) DO UPDATE SET
+                reason = excluded.reason,
+                created_by = excluded.created_by
+            """,
+            (str(discord_user_id), reason, _utc_now(), created_by),
+        )
+        await self.connection.commit()
+    
+    async def remove_from_blacklist(self, *, discord_user_id: str) -> None:
+        await self.connection.execute(
+            "DELETE FROM rob_blacklist WHERE discord_user_id = ?",
+            (str(discord_user_id),),
+        )
+        await self.connection.commit()
+
+    async def is_user_blacklisted(self, *, discord_user_id: str) -> bool:
+        async with self.connection.execute(
+            "SELECT 1 FROM rob_blacklist WHERE discord_user_id = ? LIMIT 1",
+            (str(discord_user_id),),
+        ) as cursor:
+            return (await cursor.fetchone()) is not None
+    
+    async def remove_throne_creator_by_discord_user(
+        self,
+        *,
+        guild_id: str,
+        discord_user_id: str,
+    ) -> str | None:
+        """Remove a user's Throne registration. Keeps event_sends history."""
+        creator = await self.get_throne_creator_by_discord_user(
+            guild_id=guild_id, discord_user_id=str(discord_user_id)
+        )
+        if creator is None:
+            return None
+        await self.connection.execute(
+            "DELETE FROM throne_wishlist_items WHERE creator_id = ?",
+            (creator.throne_creator_id,),
+        )
+        await self.connection.execute(
+            "DELETE FROM throne_creators WHERE id = ?",
+            (creator.id,),
+        )
+        await self.connection.execute(
+            "DELETE FROM event_dommes WHERE user_id = ?",
+            (int(discord_user_id),),
+        )
+        await self.connection.commit()
+        return creator.throne_creator_id
