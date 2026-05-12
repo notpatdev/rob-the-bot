@@ -379,14 +379,82 @@ class RobEventCog(commands.Cog):
             mention_author=False,
         )
 
-    async def _check_admin_context(self, ctx: commands.Context[commands.Bot]) -> bool:
-        if ctx.guild is None or not isinstance(ctx.author, discord.Member):
-            await ctx.reply("Server only.", mention_author=False)
-            return False
-        if not has_admin_command_permissions(ctx.author, self.config):
-            await ctx.reply("Nope. Not for you.", mention_author=False)
-            return False
-        return True
+    @commands.command(name="throne-blacklist")
+    @commands.has_permissions(manage_guild=True)
+    async def throne_blacklist(self, ctx: commands.Context, target: str) -> None:
+        """Remove a user's Throne registration and add them to Rob's blacklist."""
+        try:
+            discord_user_id = str(int(target.strip("<@!>")))
+        except ValueError:
+            await ctx.reply("Invalid user id.", mention_author=False)
+            return
+    
+        guild_id = str(ctx.guild.id) if ctx.guild else "0"
+    
+        removed_creator_id = await self.database.remove_throne_creator_by_discord_user(
+            guild_id=guild_id, discord_user_id=discord_user_id
+        )
+        await self.database.add_to_blacklist(
+            discord_user_id=discord_user_id,
+            reason="throne blacklist",
+            created_by=str(ctx.author.id),
+        )
+    
+        if removed_creator_id is None:
+            await ctx.reply(
+                f"No Throne registration found for `{discord_user_id}`. Added to global blacklist.",
+                mention_author=False,
+            )
+        else:
+            await ctx.reply(
+                f"Removed Throne registration `{removed_creator_id}` for `{discord_user_id}` and added them to the global blacklist. Historical sends are kept.",
+                mention_author=False,
+            )
+    
+    
+    @commands.command(name="rob-blacklist")
+    @commands.has_permissions(manage_guild=True)
+    async def rob_blacklist(self, ctx: commands.Context, target: str, *, reason: str = "manual") -> None:
+        """Add a user to Rob's silent blacklist."""
+        try:
+            discord_user_id = str(int(target.strip("<@!>")))
+        except ValueError:
+            await ctx.reply("Invalid user id.", mention_author=False)
+            return
+        await self.database.add_to_blacklist(
+            discord_user_id=discord_user_id,
+            reason=reason,
+            created_by=str(ctx.author.id),
+        )
+        await ctx.reply(
+            f"`{discord_user_id}` has been added to the blacklist. Silent.",
+            mention_author=False,
+        )
+    
+    
+    @commands.command(name="rob-unblacklist")
+    @commands.has_permissions(manage_guild=True)
+    async def rob_unblacklist(self, ctx: commands.Context, target: str) -> None:
+        """Remove a user from Rob's silent blacklist."""
+        try:
+            discord_user_id = str(int(target.strip("<@!>")))
+        except ValueError:
+            await ctx.reply("Invalid user id.", mention_author=False)
+            return
+        await self.database.remove_from_blacklist(discord_user_id=discord_user_id)
+        await ctx.reply(
+            f"`{discord_user_id}` has been removed from the blacklist.",
+            mention_author=False,
+        )
+    
+        async def _check_admin_context(self, ctx: commands.Context[commands.Bot]) -> bool:
+            if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+                await ctx.reply("Server only.", mention_author=False)
+                return False
+            if not has_admin_command_permissions(ctx.author, self.config):
+                await ctx.reply("Nope. Not for you.", mention_author=False)
+                return False
+            return True
 
     @app_commands.command(name="register", description="Register for the event as a Domme or Sub.")
     @app_commands.describe(action="Choose whether you're signing up as a Domme or a Sub.")
