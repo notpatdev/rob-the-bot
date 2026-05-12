@@ -12,6 +12,7 @@ from bot.database import Database
 from bot.event_cog import RobEventCog
 from bot.throne_tracker import ThroneTrackerCog
 from bot.webhook_server import ThroneWebhookServer
+from bot.deny import send_deny_response
 
 
 class RobBot(commands.Bot):
