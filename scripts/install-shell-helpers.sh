@@ -149,6 +149,24 @@ cat >> "${BASHRC}" <<'SHELL_HELPERS'
 
 # >> rob-the-bot shell helpers >>
 
+# ── Input validators (used by rob() and throne()) ────────────────────────────
+# Discord snowflake IDs are 17-19 digit integers; enforce that strictly.
+_rob_valid_uid() {
+  [[ "${1:-}" =~ ^[0-9]{17,19}$ ]]
+}
+# Throne handles: alphanumeric, hyphens, underscores; no shell meta-chars.
+_rob_valid_handle() {
+  [[ "${1:-}" =~ ^[A-Za-z0-9_-]{1,64}$ ]]
+}
+# Strictly positive integers (send IDs, cent amounts).
+_rob_valid_posint() {
+  [[ "${1:-}" =~ ^[0-9]+$ ]] && [ "${1}" -gt 0 ]
+}
+# Escape single quotes for safe use in inline SQL literals.
+_rob_sql_escape() {
+  printf '%s' "${1}" | sed "s/'/''/g"
+}
+
 rob() {
   local DB="/opt/rob-the-bot/data/rob_the_bot.sqlite3"
   local RED GREEN YELLOW CYAN BOLD RESET
@@ -162,13 +180,18 @@ rob() {
         echo "${RED}usage: rob blacklist <discord_user_id> [reason]${RESET}" >&2
         return 1
       fi
-      sudo sqlite3 "$DB" <<EOF
-INSERT INTO rob_blacklist (discord_user_id, reason, created_at, created_by)
-VALUES ('$uid', '$reason', datetime('now'), 'shell')
-ON CONFLICT(discord_user_id) DO UPDATE SET
-  reason = excluded.reason,
-  created_by = excluded.created_by;
-EOF
+      if ! _rob_valid_uid "$uid"; then
+        echo "${RED}Error: discord_user_id must be a 17-19 digit integer.${RESET}" >&2
+        return 1
+      fi
+      local safe_reason
+      safe_reason="$(_rob_sql_escape "$reason")"
+      sudo sqlite3 "$DB" \
+        "INSERT INTO rob_blacklist (discord_user_id, reason, created_at, created_by)
+         VALUES ('${uid}', '${safe_reason}', datetime('now'), 'shell')
+         ON CONFLICT(discord_user_id) DO UPDATE SET
+           reason = excluded.reason,
+           created_by = excluded.created_by;"
       echo "${GREEN}Blacklisted ${uid} (silent).${RESET}"
       ;;
 
@@ -178,7 +201,11 @@ EOF
         echo "${RED}usage: rob unblacklist <discord_user_id>${RESET}" >&2
         return 1
       fi
-      sudo sqlite3 "$DB" "DELETE FROM rob_blacklist WHERE discord_user_id = '$uid';"
+      if ! _rob_valid_uid "$uid"; then
+        echo "${RED}Error: discord_user_id must be a 17-19 digit integer.${RESET}" >&2
+        return 1
+      fi
+      sudo sqlite3 "$DB" "DELETE FROM rob_blacklist WHERE discord_user_id = '${uid}';"
       echo "${GREEN}Removed ${uid} from blacklist.${RESET}"
       ;;
 
@@ -235,12 +262,16 @@ throne() {
       if [ -z "$handle" ]; then
         _throne_error "usage: throne sends <handle>"; return 1
       fi
+      if ! _rob_valid_handle "$handle"; then
+        _throne_error "handle must contain only letters, digits, hyphens, or underscores."
+        return 1
+      fi
       _throne_header "Sends for @${handle}"
       sudo sqlite3 -separator '|' "$DB" \
         "SELECT es.id, es.sub_name, es.amount_usd, es.item_name, es.sent_at
          FROM event_sends es
          JOIN throne_creators tc ON tc.discord_user_id = CAST(es.domme_user_id AS TEXT)
-         WHERE LOWER(tc.throne_handle) = LOWER('$handle')
+         WHERE LOWER(tc.throne_handle) = LOWER('${handle}')
          ORDER BY es.sent_at DESC LIMIT 25;" \
       | while IFS='|' read -r id sub usd item at; do
           [ -z "$id" ] && continue
@@ -254,12 +285,16 @@ throne() {
       if [ -z "$handle" ]; then
         _throne_error "usage: throne wishlist <handle>"; return 1
       fi
+      if ! _rob_valid_handle "$handle"; then
+        _throne_error "handle must contain only letters, digits, hyphens, or underscores."
+        return 1
+      fi
       _throne_header "Wishlist for @${handle}"
       sudo sqlite3 -separator '|' "$DB" \
         "SELECT twi.item_name, twi.amount_usd, twi.currency, twi.is_available
          FROM throne_wishlist_items twi
          JOIN throne_creators tc ON tc.throne_creator_id = twi.creator_id
-         WHERE LOWER(tc.throne_handle) = LOWER('$handle')
+         WHERE LOWER(tc.throne_handle) = LOWER('${handle}')
          ORDER BY twi.amount_usd DESC;" \
       | while IFS='|' read -r name usd cur avail; do
           [ -z "$name" ] && [ -z "$usd" ] && continue
@@ -277,6 +312,16 @@ throne() {
       if [ -z "$handle" ] || [ -z "$send_id" ] || [ -z "$amount_cents" ]; then
         _throne_error "usage: throne fix-send <handle> <send_id> <amount_cents>"
         return 1
+      fi
+      if ! _rob_valid_handle "$handle"; then
+        _throne_error "handle must contain only letters, digits, hyphens, or underscores."
+        return 1
+      fi
+      if ! _rob_valid_posint "$send_id"; then
+        _throne_error "send_id must be a positive integer."; return 1
+      fi
+      if ! _rob_valid_posint "$amount_cents"; then
+        _throne_error "amount_cents must be a positive integer."; return 1
       fi
       local amount_usd
       amount_usd=$(python3 -c "print(round(${amount_cents} / 100, 2))")
@@ -323,13 +368,17 @@ throne() {
       if [ -z "$handle" ]; then
         _throne_error "usage: throne status <handle>"; return 1
       fi
+      if ! _rob_valid_handle "$handle"; then
+        _throne_error "handle must contain only letters, digits, hyphens, or underscores."
+        return 1
+      fi
       _throne_header "Status: @${handle}"
       sudo sqlite3 -separator '|' "$DB" \
         "SELECT throne_handle, throne_creator_id, tracking_mode,
                 COALESCE(webhook_connected_at,'—'), discord_user_id,
                 COALESCE(last_successful_event_at,'—'), overlay_detected
          FROM throne_creators
-         WHERE LOWER(throne_handle) = LOWER('$handle')
+         WHERE LOWER(throne_handle) = LOWER('${handle}')
          LIMIT 1;" \
       | while IFS='|' read -r h cid mode wcat uid last_ev overlay; do
           _throne_kv "Handle:"     "@$h"
@@ -347,11 +396,15 @@ throne() {
       if [ -z "$handle" ]; then
         _throne_error "usage: throne url <handle>"; return 1
       fi
+      if ! _rob_valid_handle "$handle"; then
+        _throne_error "handle must contain only letters, digits, hyphens, or underscores."
+        return 1
+      fi
       local row
       row=$(sudo sqlite3 -separator '|' "$DB" \
         "SELECT throne_creator_id, webhook_secret
          FROM throne_creators
-         WHERE LOWER(throne_handle) = LOWER('$handle')
+         WHERE LOWER(throne_handle) = LOWER('${handle}')
          LIMIT 1;")
       if [ -z "$row" ]; then
         _throne_error "No creator found for handle: $handle"
@@ -369,22 +422,28 @@ throne() {
         _throne_error "usage: throne blacklist <discord_user_id>"
         return 1
       fi
+      if ! _rob_valid_uid "$uid"; then
+        _throne_error "discord_user_id must be a 17-19 digit integer."
+        return 1
+      fi
+      # creator_id comes from our own database, not user input.
       local creator_id
       creator_id=$(sudo sqlite3 "$DB" \
         "SELECT throne_creator_id FROM throne_creators
-         WHERE discord_user_id = '$uid' LIMIT 1;")
+         WHERE discord_user_id = '${uid}' LIMIT 1;")
       if [ -n "$creator_id" ]; then
-        sudo sqlite3 "$DB" "DELETE FROM throne_wishlist_items WHERE creator_id = '$creator_id';"
-        sudo sqlite3 "$DB" "DELETE FROM throne_creators WHERE discord_user_id = '$uid';"
-        sudo sqlite3 "$DB" "DELETE FROM event_dommes WHERE user_id = $uid;"
+        local safe_cid
+        safe_cid="$(_rob_sql_escape "$creator_id")"
+        sudo sqlite3 "$DB" "DELETE FROM throne_wishlist_items WHERE creator_id = '${safe_cid}';"
+        sudo sqlite3 "$DB" "DELETE FROM throne_creators WHERE discord_user_id = '${uid}';"
+        sudo sqlite3 "$DB" "DELETE FROM event_dommes WHERE user_id = ${uid};"
       fi
-      sudo sqlite3 "$DB" <<EOF
-INSERT INTO rob_blacklist (discord_user_id, reason, created_at, created_by)
-VALUES ('$uid', 'throne blacklist', datetime('now'), 'shell')
-ON CONFLICT(discord_user_id) DO UPDATE SET
-  reason = excluded.reason,
-  created_by = excluded.created_by;
-EOF
+      sudo sqlite3 "$DB" \
+        "INSERT INTO rob_blacklist (discord_user_id, reason, created_at, created_by)
+         VALUES ('${uid}', 'throne blacklist', datetime('now'), 'shell')
+         ON CONFLICT(discord_user_id) DO UPDATE SET
+           reason = excluded.reason,
+           created_by = excluded.created_by;"
       _throne_header "Throne Blacklist"
       _throne_ok "Done (silent)."
       if [ -n "$creator_id" ]; then

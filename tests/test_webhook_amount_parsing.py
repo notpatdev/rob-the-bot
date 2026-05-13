@@ -59,7 +59,7 @@ class TestGiftPurchasedAmountParsing(unittest.TestCase):
 class TestContributionPurchasedAmountParsing(unittest.TestCase):
     """contribution_purchased: amount field is always in minor units (cents)."""
 
-    def _payload(self, amount, currency):
+    def _contribution_payload(self, amount, currency):
         return {
             "event_type": "contribution_purchased",
             "data": {
@@ -78,7 +78,7 @@ class TestContributionPurchasedAmountParsing(unittest.TestCase):
         behaviour produced amount_cents=150000 and amount_usd=1500.0 because
         the code treated EUR amounts as major units and multiplied by 100.
         """
-        fields = _extract_gift_fields(self._payload(1500, "EUR"))
+        fields = _extract_gift_fields(self._contribution_payload(1500, "EUR"))
         self.assertEqual(fields["event_type"], "contribution_purchased")
         self.assertEqual(fields["currency"], "EUR")
         # Key invariant: we must NOT be off by 100×
@@ -87,13 +87,13 @@ class TestContributionPurchasedAmountParsing(unittest.TestCase):
 
     def test_contribution_usd_minor_units(self):
         """contribution_purchased amount:999, currency:USD → amount_cents=999, amount_usd≈9.99"""
-        fields = _extract_gift_fields(self._payload(999, "USD"))
+        fields = _extract_gift_fields(self._contribution_payload(999, "USD"))
         self.assertEqual(fields["amount_cents"], 999)
         self.assertAlmostEqual(fields["amount_usd"], 9.99, places=2)
 
     def test_contribution_gbp_minor_units(self):
         """contribution_purchased amount:500, currency:GBP → amount_cents=500, amount_usd≈5.00"""
-        fields = _extract_gift_fields(self._payload(500, "GBP"))
+        fields = _extract_gift_fields(self._contribution_payload(500, "GBP"))
         self.assertEqual(fields["amount_cents"], 500)
         self.assertAlmostEqual(fields["amount_usd"], 5.00, places=2)
 
