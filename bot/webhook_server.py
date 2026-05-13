@@ -273,12 +273,10 @@ def _extract_gift_fields(payload: dict[str, Any]) -> dict[str, Any]:
                     numeric_amount = float(raw_amount)
     
                 if numeric_amount is not None:
-                    # Throne docs: contribution_purchased.data.amount is in minor units.
-                    if (
-                        event_type == "contribution_purchased"
-                        and currency
-                        and currency.upper() == "USD"
-                    ):
+                    # Throne docs: contribution_purchased.data.amount is always
+                    # in minor units (cents), regardless of currency.
+                    # gift_purchased / item_purchased send major-unit USD values.
+                    if event_type == "contribution_purchased":
                         amount_cents = int(round(numeric_amount))
                         amount_usd = amount_cents / 100.0
                     else:

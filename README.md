@@ -256,7 +256,46 @@ That gives you:
 - the systemd service
 - the deploy SSH key and sudo rules needed by the workflow
 
-## Validation
+## Shell Helpers
+
+Rob ships two admin shell functions — `rob` and `throne` — that let you manage
+the bot directly from the server without touching Python.
+
+### Install
+
+```bash
+bash scripts/install-shell-helpers.sh
+source ~/.bashrc
+```
+
+The script:
+- Backs up `~/.bashrc` before touching anything.
+- Strips any existing `rob()`/`throne()` blocks (sentinel-aware for
+  re-installs, brace-aware Python helper for legacy files).
+- Appends the clean, production-tested function definitions.
+- Syntax-checks the result with `bash -n`; auto-restores the backup on failure.
+- Safe to re-run idempotently.
+
+### Usage
+
+```bash
+# Rob admin
+rob blacklist <discord_user_id> [reason]   # silently block a user
+rob unblacklist <discord_user_id>
+rob blacklisted                            # list all blocked users
+rob restart                               # restart the bot
+
+# Throne admin
+throne sends <handle>                      # recent sends for a creator
+throne wishlist <handle>                   # cached wishlist items
+throne fix-send <handle> <id> <cents>      # correct a send amount
+throne refresh                            # restart the bot
+throne dommes                             # list all registered dommes
+throne subs                               # list all registered subs
+throne status <handle>                     # creator health check
+throne url <handle>                        # print webhook URL
+throne blacklist <discord_user_id>         # remove creator + global blacklist
+```
 
 Useful checks:
 
