@@ -106,7 +106,8 @@ def remove_function_blocks(lines: list[str], patterns: list[re.Pattern]) -> list
                 stripped_line = raw.rstrip("\n")
                 if heredoc_end is not None:
                     # Inside a heredoc: only watch for the closing marker.
-                    if stripped_line.rstrip() == heredoc_end or stripped_line == heredoc_end:
+                    # Strip all trailing whitespace to handle \r\n line endings.
+                    if stripped_line.rstrip() == heredoc_end:
                         heredoc_end = None
                 else:
                     # Detect heredoc opening: <<WORD  <<'WORD'  <<"WORD"  <<-WORD
@@ -330,6 +331,9 @@ throne() {
       fi
       local amount_usd
       amount_usd=$(python3 -c "import sys; print(round(int(sys.argv[1]) / 100, 2))" "${amount_cents}")
+      if ! [[ "${amount_usd}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        _throne_error "Failed to compute amount_usd from ${amount_cents} cents."; return 1
+      fi
       sudo sqlite3 "$DB" \
         "UPDATE event_sends SET amount_usd = ${amount_usd} WHERE id = ${send_id};"
       _throne_ok "Send #${send_id} → \$${amount_usd} USD (${amount_cents} cents)."
@@ -445,7 +449,7 @@ throne() {
         safe_cid="$(_rob_sql_escape "$creator_id")"
         sudo sqlite3 "$DB" "DELETE FROM throne_wishlist_items WHERE creator_id = '${safe_cid}';"
         sudo sqlite3 "$DB" "DELETE FROM throne_creators WHERE discord_user_id = '${uid}';"
-        sudo sqlite3 "$DB" "DELETE FROM event_dommes WHERE user_id = ${uid};"
+        sudo sqlite3 "$DB" "DELETE FROM event_dommes WHERE user_id = '${uid}';"
       fi
       sudo sqlite3 "$DB" \
         "INSERT INTO rob_blacklist (discord_user_id, reason, created_at, created_by)
