@@ -50,6 +50,7 @@ success "Backup written."
 # ── 2. Strip old blocks (sentinel + legacy brace-aware) ─────────────────────
 step "Stripping existing rob()/throne() blocks from ${BASHRC}"
 python3 - "${BASHRC}" "${SENTINEL_START}" "${SENTINEL_END}" <<'PYEOF'
+from __future__ import annotations
 import sys
 import re
 
@@ -267,11 +268,13 @@ throne() {
         return 1
       fi
       _throne_header "Sends for @${handle}"
+      local safe_handle
+      safe_handle="$(_rob_sql_escape "${handle}")"
       sudo sqlite3 -separator '|' "$DB" \
         "SELECT es.id, es.sub_name, es.amount_usd, es.item_name, es.sent_at
          FROM event_sends es
          JOIN throne_creators tc ON tc.discord_user_id = CAST(es.domme_user_id AS TEXT)
-         WHERE LOWER(tc.throne_handle) = LOWER('${handle}')
+         WHERE LOWER(tc.throne_handle) = LOWER('${safe_handle}')
          ORDER BY es.sent_at DESC LIMIT 25;" \
       | while IFS='|' read -r id sub usd item at; do
           [ -z "$id" ] && continue
@@ -290,11 +293,13 @@ throne() {
         return 1
       fi
       _throne_header "Wishlist for @${handle}"
+      local safe_handle
+      safe_handle="$(_rob_sql_escape "${handle}")"
       sudo sqlite3 -separator '|' "$DB" \
         "SELECT twi.item_name, twi.amount_usd, twi.currency, twi.is_available
          FROM throne_wishlist_items twi
          JOIN throne_creators tc ON tc.throne_creator_id = twi.creator_id
-         WHERE LOWER(tc.throne_handle) = LOWER('${handle}')
+         WHERE LOWER(tc.throne_handle) = LOWER('${safe_handle}')
          ORDER BY twi.amount_usd DESC;" \
       | while IFS='|' read -r name usd cur avail; do
           [ -z "$name" ] && [ -z "$usd" ] && continue
@@ -324,7 +329,7 @@ throne() {
         _throne_error "amount_cents must be a positive integer."; return 1
       fi
       local amount_usd
-      amount_usd=$(python3 -c "print(round(${amount_cents} / 100, 2))")
+      amount_usd=$(python3 -c "import sys; print(round(int(sys.argv[1]) / 100, 2))" "${amount_cents}")
       sudo sqlite3 "$DB" \
         "UPDATE event_sends SET amount_usd = ${amount_usd} WHERE id = ${send_id};"
       _throne_ok "Send #${send_id} → \$${amount_usd} USD (${amount_cents} cents)."
@@ -373,12 +378,14 @@ throne() {
         return 1
       fi
       _throne_header "Status: @${handle}"
+      local safe_handle
+      safe_handle="$(_rob_sql_escape "${handle}")"
       sudo sqlite3 -separator '|' "$DB" \
         "SELECT throne_handle, throne_creator_id, tracking_mode,
                 COALESCE(webhook_connected_at,'—'), discord_user_id,
                 COALESCE(last_successful_event_at,'—'), overlay_detected
          FROM throne_creators
-         WHERE LOWER(throne_handle) = LOWER('${handle}')
+         WHERE LOWER(throne_handle) = LOWER('${safe_handle}')
          LIMIT 1;" \
       | while IFS='|' read -r h cid mode wcat uid last_ev overlay; do
           _throne_kv "Handle:"     "@$h"
@@ -401,10 +408,12 @@ throne() {
         return 1
       fi
       local row
+      local safe_handle
+      safe_handle="$(_rob_sql_escape "${handle}")"
       row=$(sudo sqlite3 -separator '|' "$DB" \
         "SELECT throne_creator_id, webhook_secret
          FROM throne_creators
-         WHERE LOWER(throne_handle) = LOWER('${handle}')
+         WHERE LOWER(throne_handle) = LOWER('${safe_handle}')
          LIMIT 1;")
       if [ -z "$row" ]; then
         _throne_error "No creator found for handle: $handle"
