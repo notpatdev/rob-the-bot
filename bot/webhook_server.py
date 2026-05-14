@@ -621,7 +621,7 @@ class ThroneWebhookServer:
         if result is None:
             # Duplicate.
             return web.json_response({"ok": True, "duplicate": True})
-        send_id, _ = result
+        send_id, send_public_id = result
 
         # 12. Update throne_creators tracking state.
         now_str = _utc_now()
@@ -632,4 +632,6 @@ class ThroneWebhookServer:
         )
 
         # 13. Return success.
-        return web.json_response({"ok": True, "inserted": True, "send_id": send_id})
+        return web.json_response(
+            {"ok": True, "inserted": True, "send_id": send_id, "send_public_id": send_public_id}
+        )

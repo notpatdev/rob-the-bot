@@ -44,6 +44,11 @@ _RESERVED_SUB_NAMES = {"anonymous", "unclaimed send", "unclaimed"}
 _MANUAL_SEND_SUB_FALLBACK = "Sub with no nickname claimed"
 _MANUAL_SEND_METHODS = ("cashapp", "venmo", "paypal", "onlyfans", "loyalfans", "youpay", "other")
 _REQUEST_SEND_METHODS = _MANUAL_SEND_METHODS + ("throne",)
+_SEND_REQUEST_RATE_LIMIT = 3
+_SEND_REQUEST_ADD_HINT_TEMPLATE = (
+    "If this is real, run `/add amount:{amount:.2f} method:{method} sub:{sub}` "
+    "to log it on the leaderboard {hint}"
+)
 
 
 class SendRequestDecisionView(discord.ui.View):
@@ -663,9 +668,9 @@ class RobEventCog(commands.Cog):
             domme_user_id=domme.id,
             since=since,
         )
-        if recent_count >= 3:
+        if recent_count >= _SEND_REQUEST_RATE_LIMIT:
             await interaction.response.send_message(
-                "You hit the limit for send requests to this domme (3 per 24h).",
+                f"You hit the limit for send requests to this domme ({_SEND_REQUEST_RATE_LIMIT} per 24h).",
                 ephemeral=True,
             )
             return
@@ -679,14 +684,23 @@ class RobEventCog(commands.Cog):
             note=trimmed_note,
         )
 
-        sub_display_name = interaction.user.display_name if isinstance(interaction.user, discord.Member) else interaction.user.name
+        sub_display_name = interaction.user.display_name
+        # `/add` intentionally excludes `throne` because webhook sends are normally
+        # automatic, so throne requests map to `other` when manually logging.
+        suggested_method = method.value if method.value in _MANUAL_SEND_METHODS else "other"
+        method_hint = "(`throne` requests should be logged as `other` in /add)." if method.value == "throne" else ""
+        add_hint = _SEND_REQUEST_ADD_HINT_TEMPLATE.format(
+            amount=float(amount),
+            method=suggested_method,
+            sub=sub_display_name,
+            hint=method_hint,
+        ).rstrip()
         dm_message = (
             f"💌 **Send Request from `{sub_display_name}`** (`{interaction.user.id}`)\n"
             f"**Amount:** {format_money(float(amount))}\n"
             f"**Method:** {method.value}\n"
             f"**Note:** {trimmed_note or '—'}\n\n"
-            f"If this is real, run `/add amount:{float(amount):.2f} method:{method.value if method.value in _MANUAL_SEND_METHODS else 'other'} sub:{sub_display_name}` "
-            "to log it on the leaderboard."
+            f"{add_hint}"
         )
 
         try:

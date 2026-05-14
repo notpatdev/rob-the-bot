@@ -745,6 +745,11 @@ class ThroneTrackerCog(commands.Cog):
         fallback_event_hash: str | None = None,
         seeded: bool = False,
     ) -> tuple[int, str] | None:
+        """Insert a send row and run the standard post-send pipeline.
+
+        Returns `(send_id, send_public_id)` on success, or `None` for duplicate/
+        rejected inserts (e.g., unique key conflicts).
+        """
         send_id = await self.database.log_event_send(
             domme_user_id=domme_user_id,
             sub_name=sub_name,
