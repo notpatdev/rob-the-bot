@@ -6,7 +6,7 @@ import logging
 import random
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiohttp
@@ -16,6 +16,7 @@ from discord.ext import commands, tasks
 
 from bot.config import BotConfig
 from bot.database import Database, EventState, SendSummary, ThroneWishlistItem
+from bot.deny import send_deny_response
 from bot.event_config import ConfiguredEvent, EventTheme, EventsConfig, load_events_config
 from bot.event_views import (
     DommeSignupModal,
@@ -40,6 +41,96 @@ from bot.utils import has_admin_command_permissions
 log = logging.getLogger(__name__)
 
 _RESERVED_SUB_NAMES = {"anonymous", "unclaimed send", "unclaimed"}
+_MANUAL_SEND_SUB_FALLBACK = "Sub with no nickname claimed"
+_MANUAL_SEND_METHODS = ("cashapp", "venmo", "paypal", "onlyfans", "loyalfans", "youpay", "other")
+_REQUEST_SEND_METHODS = _MANUAL_SEND_METHODS + ("throne",)
+_SEND_REQUEST_RATE_LIMIT = 3
+_SEND_REQUEST_ADD_HINT_TEMPLATE = (
+    "If this is real, run `/add amount:{amount:.2f} method:{method} sub:{sub}` "
+    "to log it on the leaderboard {hint}"
+)
+
+
+class SendRequestDecisionView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        cog: "RobEventCog",
+        request_id: int,
+        target_domme_id: int,
+        sub_display_name: str,
+    ) -> None:
+        super().__init__(timeout=60 * 60 * 24)
+        self.cog = cog
+        self.request_id = request_id
+        self.target_domme_id = target_domme_id
+        self.sub_display_name = sub_display_name
+
+    async def _ensure_owner(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.target_domme_id:
+            return True
+        await interaction.response.send_message("That button is not for you.", ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Approve & Log", style=discord.ButtonStyle.success)
+    async def approve_and_log(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        if not await self._ensure_owner(interaction):
+            return
+
+        request = await self.cog.database.get_send_request(request_id=self.request_id)
+        if request is None:
+            await interaction.response.edit_message(content="Request not found.", view=None)
+            return
+        if request.status != "pending":
+            await interaction.response.edit_message(
+                content=f"Request already resolved as `{request.status}`.",
+                view=None,
+            )
+            return
+
+        tracker_cog = self.cog.bot.get_cog("ThroneTrackerCog")
+        if tracker_cog is None:
+            await interaction.response.send_message("Rob lost the send logger. Try again in a minute.", ephemeral=True)
+            return
+
+        context = await self.cog.get_runtime_context()
+        event_key = context.event_key if context.is_event_active else None
+        item_name = (request.note or "").strip() or f"Manual send via {request.method}"
+        result = await tracker_cog.record_send(
+            domme_user_id=request.domme_user_id,
+            sub_name=self.sub_display_name or _MANUAL_SEND_SUB_FALLBACK,
+            amount_usd=request.amount_usd,
+            item_name=item_name,
+            item_image_url=None,
+            source=f"request:{request.method}",
+            is_private=False,
+            event_key=event_key,
+        )
+        if result is None:
+            await interaction.response.send_message("That send could not be logged right now.", ephemeral=True)
+            return
+
+        _, send_public_id = result
+        await self.cog.database.resolve_send_request(request_id=request.id, status="approved")
+        await interaction.response.edit_message(content=f"✅ Logged as send #{send_public_id}.", view=None)
+
+    @discord.ui.button(label="Ignore", style=discord.ButtonStyle.secondary)
+    async def ignore(
+        self,
+        interaction: discord.Interaction,
+        _: discord.ui.Button,
+    ) -> None:
+        if not await self._ensure_owner(interaction):
+            return
+
+        request = await self.cog.database.get_send_request(request_id=self.request_id)
+        if request is not None and request.status == "pending":
+            await self.cog.database.resolve_send_request(request_id=request.id, status="ignored")
+        await interaction.response.edit_message(content="❌ Ignored.", view=None)
 
 
 @dataclass(frozen=True)
@@ -282,6 +373,16 @@ class RobEventCog(commands.Cog):
     def _member_has_role(member: discord.Member, role_id: int) -> bool:
         return role_id > 0 and any(role.id == role_id for role in member.roles)
 
+    async def _is_registered_domme(self, *, member: discord.Member) -> bool:
+        if self._member_has_role(member, self.config.domme_role_id):
+            return True
+        guild_id = str(member.guild.id) if member.guild is not None else str(self.config.guild_id or 0)
+        creator = await self.database.get_throne_creator_by_discord_user(
+            guild_id=guild_id,
+            discord_user_id=str(member.id),
+        )
+        return creator is not None
+
     @commands.group(name="event", invoke_without_command=True)
     async def event_group(self, ctx: commands.Context[commands.Bot]) -> None:
         await ctx.reply(
@@ -478,6 +579,152 @@ class RobEventCog(commands.Cog):
             await interaction.response.send_modal(DommeSignupModal(self))
         else:
             await interaction.response.send_modal(SubSignupModal(self))
+
+    @app_commands.command(name="add", description="Log a manual send to the leaderboard.")
+    @app_commands.describe(
+        amount="Amount sent in USD",
+        method="Where the send happened",
+        sub="Sub name/handle",
+        note="Optional note for this send",
+    )
+    @app_commands.choices(method=[app_commands.Choice(name=value, value=value) for value in _MANUAL_SEND_METHODS])
+    async def add_send(
+        self,
+        interaction: discord.Interaction,
+        amount: app_commands.Range[float, 0.01],
+        method: app_commands.Choice[str],
+        sub: str | None = None,
+        note: str | None = None,
+    ) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("Server only.", ephemeral=True)
+            return
+
+        if not await self._is_registered_domme(member=interaction.user):
+            await interaction.response.send_message("Only registered Dommes can use this command.", ephemeral=True)
+            return
+
+        tracker_cog = self.bot.get_cog("ThroneTrackerCog")
+        if tracker_cog is None:
+            await interaction.response.send_message("Rob lost the send logger. Try again in a minute.", ephemeral=True)
+            return
+
+        context = await self.get_runtime_context()
+        event_key = context.event_key if context.is_event_active else None
+        clean_sub = (sub or "").strip() or _MANUAL_SEND_SUB_FALLBACK
+        item_name = (note or "").strip() or f"Manual send via {method.value}"
+        result = await tracker_cog.record_send(
+            domme_user_id=interaction.user.id,
+            sub_name=clean_sub,
+            amount_usd=float(amount),
+            item_name=item_name,
+            item_image_url=None,
+            source=f"manual:{method.value}",
+            is_private=False,
+            event_key=event_key,
+        )
+        if result is None:
+            await interaction.response.send_message("That send could not be recorded right now.", ephemeral=True)
+            return
+
+        _, send_public_id = result
+        await interaction.response.send_message(
+            f"✅ Recorded send `{send_public_id}` for **{format_money(float(amount))}** via `{method.value}`.",
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="sendrequest", description="Request a Domme to log a send you made.")
+    @app_commands.describe(
+        domme="Domme you sent to",
+        amount="Amount sent in USD",
+        method="Where the send happened",
+        note="Optional context (screenshot URL, message, etc.)",
+    )
+    @app_commands.choices(method=[app_commands.Choice(name=value, value=value) for value in _REQUEST_SEND_METHODS])
+    async def send_request(
+        self,
+        interaction: discord.Interaction,
+        domme: discord.Member,
+        amount: app_commands.Range[float, 0.01],
+        method: app_commands.Choice[str],
+        note: str | None = None,
+    ) -> None:
+        blocked = await self.database.is_user_blacklisted(discord_user_id=str(interaction.user.id))
+        if blocked:
+            await send_deny_response(interaction)
+            return
+
+        if interaction.guild is None:
+            await interaction.response.send_message("Server only.", ephemeral=True)
+            return
+
+        if not await self._is_registered_domme(member=domme):
+            await interaction.response.send_message("That user isn't a registered domme.", ephemeral=True)
+            return
+
+        since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        recent_count = await self.database.count_send_requests_since(
+            sub_user_id=interaction.user.id,
+            domme_user_id=domme.id,
+            since=since,
+        )
+        if recent_count >= _SEND_REQUEST_RATE_LIMIT:
+            await interaction.response.send_message(
+                f"You hit the limit for send requests to this domme ({_SEND_REQUEST_RATE_LIMIT} per 24h).",
+                ephemeral=True,
+            )
+            return
+
+        trimmed_note = (note or "").strip() or None
+        request_id = await self.database.create_send_request(
+            sub_user_id=interaction.user.id,
+            domme_user_id=domme.id,
+            amount_usd=float(amount),
+            method=method.value,
+            note=trimmed_note,
+        )
+
+        sub_display_name = interaction.user.display_name
+        # `/add` intentionally excludes `throne` because webhook sends are normally
+        # automatic, so throne requests map to `other` when manually logging.
+        suggested_method = method.value if method.value in _MANUAL_SEND_METHODS else "other"
+        method_hint = "(`throne` requests should be logged as `other` in /add)." if method.value == "throne" else ""
+        add_hint = _SEND_REQUEST_ADD_HINT_TEMPLATE.format(
+            amount=float(amount),
+            method=suggested_method,
+            sub=sub_display_name,
+            hint=method_hint,
+        ).rstrip()
+        dm_message = (
+            f"💌 **Send Request from `{sub_display_name}`** (`{interaction.user.id}`)\n"
+            f"**Amount:** {format_money(float(amount))}\n"
+            f"**Method:** {method.value}\n"
+            f"**Note:** {trimmed_note or '—'}\n\n"
+            f"{add_hint}"
+        )
+
+        try:
+            await domme.send(
+                dm_message,
+                view=SendRequestDecisionView(
+                    cog=self,
+                    request_id=request_id,
+                    target_domme_id=domme.id,
+                    sub_display_name=sub_display_name,
+                ),
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            await self.database.delete_send_request(request_id=request_id)
+            await interaction.response.send_message(
+                "Couldn't deliver that request to the domme's DMs.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            f"Sent your request to {domme.mention}. They'll review and decide whether to log it.",
+            ephemeral=True,
+        )
 
     async def process_domme_signup(
         self,
