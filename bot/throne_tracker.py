@@ -247,7 +247,8 @@ class ThroneTrackerCog(commands.Cog):
     async def throne_group(self, ctx: commands.Context[commands.Bot]) -> None:
         await ctx.reply(
             "Rob knows: `!throne refresh` `!throne status` `!throne list` `!throne search <@user|id>` "
-            "`!throne webhook refresh <@user|id>`",
+            "`!throne webhook refresh <@user|id>` `!throne addsend <@user|id> <amount> [sub]` "
+            "`!throne addsub <@user|id> <name>` `!throne adddomme <@user|id> <url>`",
             mention_author=False,
         )
 
@@ -516,7 +517,287 @@ class ThroneTrackerCog(commands.Cog):
             mention_author=False,
         )
 
-    async def _check_admin_context(self, ctx: commands.Context[commands.Bot]) -> bool:
+    @throne_group.command(name="addsend")
+    async def throne_addsend(
+        self,
+        ctx: commands.Context[commands.Bot],
+        user_ref: str,
+        amount: float,
+        *,
+        sub: str = "",
+    ) -> None:
+        if not await self._check_admin_context(ctx):
+            return
+        if ctx.guild is None:
+            await ctx.reply("Server only.", mention_author=False)
+            return
+
+        user_id = self._parse_user_id(user_ref)
+        if user_id is None:
+            await ctx.reply(
+                view=self._simple_admin_view(
+                    "⚠️ Rob | Errors | Add Send",
+                    sections=[text_block("Could not parse that user reference.")],
+                    footer="Try a mention or a numeric Discord user ID.",
+                    accent_color=_EMBED_COLOR_ERROR,
+                ),
+                mention_author=False,
+            )
+            return
+
+        if amount <= 0:
+            await ctx.reply(
+                view=self._simple_admin_view(
+                    "⚠️ Rob | Errors | Add Send",
+                    sections=[text_block("Amount must be greater than zero.")],
+                    footer="Rob does not log free sends.",
+                    accent_color=_EMBED_COLOR_ERROR,
+                ),
+                mention_author=False,
+            )
+            return
+
+        event_cog = self.bot.get_cog("RobEventCog")
+        context = await event_cog.get_runtime_context() if event_cog is not None else None
+        event_key = context.event_key if context is not None and context.is_event_active else None
+
+        sub_name = sub.strip() or None
+        result = await self.record_send(
+            domme_user_id=user_id,
+            sub_name=sub_name,
+            amount_usd=amount,
+            item_name="Admin-logged external send",
+            item_image_url=None,
+            source="manual:admin",
+            is_private=False,
+            event_key=event_key,
+        )
+        if result is None:
+            await ctx.reply(
+                view=self._simple_admin_view(
+                    "⚠️ Rob | Errors | Add Send",
+                    sections=[text_block("Send could not be recorded (possible duplicate).")],
+                    footer="Rob checked. Nothing filed under that reference.",
+                    accent_color=_EMBED_COLOR_ERROR,
+                ),
+                mention_author=False,
+            )
+            return
+
+        _, send_public_id = result
+        user_label = await self._member_display_label(ctx.guild, user_id)
+        await ctx.reply(
+            view=self._simple_admin_view(
+                "👑 Rob | Throne Admin | Send Added",
+                sections=[
+                    text_block(
+                        f"**Send ID:** `{send_public_id}`\n"
+                        f"**Domme:** {user_label}\n"
+                        f"**Amount:** {format_money(amount)}\n"
+                        f"**Sub:** {sub_name or '*(none)*'}"
+                    )
+                ],
+                footer="Rob logged it. No receipts needed.",
+                accent_color=_EMBED_COLOR_SUCCESS,
+            ),
+            mention_author=False,
+        )
+
+    @throne_group.command(name="addsub")
+    async def throne_addsub(
+        self,
+        ctx: commands.Context[commands.Bot],
+        user_ref: str,
+        *,
+        sub_name: str,
+    ) -> None:
+        if not await self._check_admin_context(ctx):
+            return
+        if ctx.guild is None:
+            await ctx.reply("Server only.", mention_author=False)
+            return
+
+        user_id = self._parse_user_id(user_ref)
+        if user_id is None:
+            await ctx.reply(
+                view=self._simple_admin_view(
+                    "⚠️ Rob | Errors | Add Sub",
+                    sections=[text_block("Could not parse that user reference.")],
+                    footer="Try a mention or a numeric Discord user ID.",
+                    accent_color=_EMBED_COLOR_ERROR,
+                ),
+                mention_author=False,
+            )
+            return
+
+        clean_name = " ".join(sub_name.strip().split())
+        if not clean_name:
+            await ctx.reply(
+                view=self._simple_admin_view(
+                    "⚠️ Rob | Errors | Add Sub",
+                    sections=[text_block("A Throne sending name is required.")],
+                    footer="Rob needs a name to track sends against.",
+                    accent_color=_EMBED_COLOR_ERROR,
+                ),
+                mention_author=False,
+            )
+            return
+
+        existing = await self.database.get_event_sub_by_name(sub_name=clean_name)
+        if existing is not None and existing.user_id != user_id:
+            await ctx.reply(
+                view=self._simple_admin_view(
+                    "⚠️ Rob | Errors | Add Sub",
+                    sections=[text_block(f"The name `{clean_name}` is already claimed by another user.")],
+                    footer="Rob cannot register a name that is taken.",
+                    accent_color=_EMBED_COLOR_ERROR,
+                ),
+                mention_author=False,
+            )
+            return
+
+        await self.database.save_event_sub(user_id=user_id, sub_name=clean_name)
+        event_cog = self.bot.get_cog("RobEventCog")
+        if event_cog is not None:
+            await event_cog.sync_leaderboard_channel()
+
+        user_label = await self._member_display_label(ctx.guild, user_id)
+        await ctx.reply(
+            view=self._simple_admin_view(
+                "👑 Rob | Throne Admin | Sub Added",
+                sections=[
+                    text_block(
+                        f"**Discord:** {user_label}\n"
+                        f"**Sending name:** `{clean_name}`"
+                    )
+                ],
+                footer="Rob linked the sub. Sends will be claimed automatically.",
+                accent_color=_EMBED_COLOR_SUCCESS,
+            ),
+            mention_author=False,
+        )
+
+    @throne_group.command(name="adddomme")
+    async def throne_adddomme(
+        self,
+        ctx: commands.Context[commands.Bot],
+        user_ref: str,
+        throne_url: str,
+    ) -> None:
+        if not await self._check_admin_context(ctx):
+            return
+        if ctx.guild is None:
+            await ctx.reply("Server only.", mention_author=False)
+            return
+
+        user_id = self._parse_user_id(user_ref)
+        if user_id is None:
+            await ctx.reply(
+                view=self._simple_admin_view(
+                    "⚠️ Rob | Errors | Add Domme",
+                    sections=[text_block("Could not parse that user reference.")],
+                    footer="Try a mention or a numeric Discord user ID.",
+                    accent_color=_EMBED_COLOR_ERROR,
+                ),
+                mention_author=False,
+            )
+            return
+
+        normalized = normalize_throne_registration_input(throne_url.strip())
+        if normalized is None:
+            await ctx.reply(
+                view=self._simple_admin_view(
+                    "⚠️ Rob | Errors | Add Domme",
+                    sections=[text_block("That Throne link looks wrong. Try a full Throne URL or username.")],
+                    footer="Rob squinted at that link and found nothing.",
+                    accent_color=_EMBED_COLOR_ERROR,
+                ),
+                mention_author=False,
+            )
+            return
+
+        http = await self._get_http()
+        creator_info = await resolve_creator_info(
+            normalized,
+            http=http,
+            timeout_seconds=self.config.throne_http_timeout_seconds,
+        )
+        if creator_info is None:
+            await ctx.reply(
+                view=self._simple_admin_view(
+                    "⚠️ Rob | Errors | Add Domme",
+                    sections=[text_block("Rob could not resolve that Throne profile. Check the link and try again.")],
+                    footer="Throne returned nothing useful.",
+                    accent_color=_EMBED_COLOR_ERROR,
+                ),
+                mention_author=False,
+            )
+            return
+
+        guild_id = str(ctx.guild.id)
+        discord_user_id = str(user_id)
+
+        existing = await self.database.get_throne_creator_by_handle(
+            guild_id=guild_id,
+            throne_handle=creator_info.throne_handle,
+        )
+        webhook_secret = existing.webhook_secret if existing and existing.webhook_secret else secrets.token_urlsafe(32)
+        tracking_mode = "webhook" if existing is not None and existing.tracking_mode == "webhook" else "disabled"
+
+        throne_creator = await self.database.upsert_throne_creator(
+            guild_id=guild_id,
+            discord_user_id=discord_user_id,
+            throne_handle=creator_info.throne_handle,
+            throne_creator_id=creator_info.creator_id,
+            hide_own_purchases=creator_info.hide_own_purchases,
+            tracking_mode=tracking_mode,
+            webhook_secret=webhook_secret,
+            overlay_detected=False,
+        )
+
+        await self.database.save_event_domme(user_id=user_id, throne_url=normalized)
+        event_cog = self.bot.get_cog("RobEventCog")
+        if event_cog is not None:
+            await event_cog.sync_leaderboard_channel()
+
+        webhook_url = self._build_webhook_url(creator_info.creator_id, throne_creator.webhook_secret)
+        mode_labels = {
+            "webhook": "🟢 Webhook connected",
+            "disabled": "🟡 Waiting for webhook setup",
+        }
+        mode_label = mode_labels.get(tracking_mode, tracking_mode)
+        user_label = await self._member_display_label(ctx.guild, user_id)
+
+        sections: list[discord.ui.Item] = [
+            text_block(
+                f"**Discord:** {user_label}\n"
+                f"**Throne Username:** `{creator_info.throne_handle}`\n"
+                f"**Throne UID:** `{creator_info.creator_id}`\n"
+                f"**Tracking mode:** {mode_label}"
+            )
+        ]
+        if tracking_mode == "disabled":
+            sections.append(separator())
+            sections.append(
+                text_block(
+                    "**Webhook URL**\n"
+                    "Go to Throne → Settings → Integrations → Webhooks, paste this URL, "
+                    "and click Test Webhook:\n"
+                    f"`{webhook_url}`"
+                )
+            )
+
+        await ctx.reply(
+            view=self._simple_admin_view(
+                "👑 Rob | Throne Admin | Domme Added",
+                sections=sections,
+                footer="Rob filed the domme. She's on the board.",
+                accent_color=_EMBED_COLOR_SUCCESS,
+            ),
+            mention_author=False,
+        )
+
+
         if ctx.guild is None or not isinstance(ctx.author, discord.Member):
             await ctx.reply("Server only.", mention_author=False)
             return False
