@@ -532,6 +532,104 @@ if float(a) <= 0:
       _throne_warn "Run 'rob restart' so the bot re-renders the leaderboard."
       ;;
 
+    register-domme)
+      local uid="${1:-}" handle="${2:-}"
+      if [ -z "$uid" ] || [ -z "$handle" ]; then
+        _throne_error "usage: throne register-domme <discord_user_id> <throne_handle_or_url>"
+        return 1
+      fi
+      if ! _rob_valid_uid "$uid"; then
+        _throne_error "discord_user_id must be a 17-19 digit integer."
+        return 1
+      fi
+      # Normalise handle/URL using the same logic as the bot.
+      local throne_url
+      throne_url=$(python3 -c "
+import sys
+from urllib.parse import urlparse, urlunparse, quote
+val = sys.argv[1].strip()
+if not val: sys.exit(1)
+if '://' not in val and not val.startswith('www.'):
+    un = val.lstrip('@').strip()
+    if not un or any(c.isspace() for c in un): sys.exit(1)
+    val = 'https://throne.com/' + quote(un, safe='._-')
+if '://' not in val: val = 'https://' + val
+p = urlparse(val)
+h = (p.hostname or '').lower().lstrip('.')
+if h.startswith('www.'): h = h[4:]
+if h not in {'throne.com', 'throne.gifts'}: sys.exit(1)
+path = p.path.rstrip('/')
+if not path or path == '/': sys.exit(1)
+print(urlunparse(('https', h, path, '', '', '')))
+" "${handle}" 2>/dev/null)
+      if [ -z "$throne_url" ]; then
+        _throne_error "Invalid Throne handle or URL: ${handle}"
+        return 1
+      fi
+      local safe_url
+      safe_url="$(_rob_sql_escape "${throne_url}")"
+      sudo sqlite3 "$DB" \
+        "INSERT INTO event_dommes (user_id, throne_url, registered_at)
+         VALUES (${uid}, '${safe_url}', datetime('now'))
+         ON CONFLICT(user_id) DO UPDATE SET
+           throne_url = excluded.throne_url;"
+      _throne_header "Domme Registered"
+      _throne_ok "Registered."
+      _throne_kv "Discord UID:" "${uid}"
+      _throne_kv "Throne URL:"  "${throne_url}"
+      _throne_warn "For full webhook tracking, also run /register-domme on Discord."
+      _throne_warn "Run 'rob restart' so the bot picks up the new registration."
+      ;;
+
+    register-sub)
+      local uid="${1:-}" sub_name="${2:-}"
+      if [ -z "$uid" ] || [ -z "$sub_name" ]; then
+        _throne_error "usage: throne register-sub <discord_user_id> <sub_name>"
+        return 1
+      fi
+      if ! _rob_valid_uid "$uid"; then
+        _throne_error "discord_user_id must be a 17-19 digit integer."
+        return 1
+      fi
+      # Normalise whitespace (collapse runs), matching what the bot does.
+      local norm_name
+      norm_name=$(python3 -c "import sys; print(' '.join(sys.argv[1].split()))" "${sub_name}")
+      if [ -z "$norm_name" ]; then
+        _throne_error "sub_name must not be empty."
+        return 1
+      fi
+      local safe_name
+      safe_name="$(_rob_sql_escape "${norm_name}")"
+      # Reject if name is taken by a different user.
+      local existing_uid
+      existing_uid=$(sudo sqlite3 "$DB" \
+        "SELECT user_id FROM event_subs
+         WHERE sub_name = '${safe_name}' COLLATE NOCASE LIMIT 1;" 2>/dev/null || true)
+      if [ -n "$existing_uid" ] && [ "$existing_uid" != "$uid" ]; then
+        _throne_error "Name '${norm_name}' is already taken by user ${existing_uid}."
+        return 1
+      fi
+      sudo sqlite3 "$DB" \
+        "INSERT INTO event_subs (user_id, sub_name, registered_at)
+         VALUES (${uid}, '${safe_name}', datetime('now'))
+         ON CONFLICT(user_id) DO UPDATE SET
+           sub_name = excluded.sub_name;"
+      # Claim any historical unclaimed sends matching this sub_name (mirrors bot logic).
+      local claimed
+      claimed=$(sudo sqlite3 "$DB" \
+        "UPDATE event_sends
+         SET claimed_sub_user_id = ${uid}
+         WHERE sub_name = '${safe_name}' COLLATE NOCASE
+           AND claimed_sub_user_id IS NULL;
+         SELECT changes();")
+      _throne_header "Sub Registered"
+      _throne_ok "Registered."
+      _throne_kv "Discord UID:" "${uid}"
+      _throne_kv "Sub name:"    "${norm_name}"
+      _throne_kv "Sends claimed:" "${claimed:-0}"
+      _throne_warn "Run 'rob restart' so the bot picks up the new registration."
+      ;;
+
     webhook-rebuild)
       local handle="${1:-}"
       if [ -z "$handle" ]; then
@@ -589,7 +687,9 @@ if float(a) <= 0:
         "${BOLD}throne — Rob the Bot shell helper${RESET}" \
         "" \
         "Usage:" \
-        "  throne addsend  <discord_user_id> <amount_usd> [sub_name]" \
+        "  throne addsend       <discord_user_id> <amount_usd> [sub_name]" \
+        "  throne register-domme <discord_user_id> <throne_handle_or_url>" \
+        "  throne register-sub  <discord_user_id> <sub_name>" \
         "  throne sends    <handle>" \
         "  throne wishlist <handle>" \
         "  throne fix-send <handle> <send_id> <amount_cents>" \
