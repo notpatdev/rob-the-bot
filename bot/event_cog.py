@@ -744,6 +744,11 @@ class RobEventCog(commands.Cog):
             )
             return
 
+        # Defer here — HTTP calls to Throne can take several seconds and
+        # Discord's interaction window is only 3 s.  All replies after this
+        # point must go through interaction.followup.send().
+        await interaction.response.defer(ephemeral=True)
+
         http = await self._get_http()
 
         # Resolve full creator info (id + handle + hideOwnPurchases).
@@ -753,7 +758,7 @@ class RobEventCog(commands.Cog):
             timeout_seconds=self.config.throne_http_timeout_seconds,
         )
         if creator_info is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Rob squinted at that link and found nothing. Check it and try again.",
                 ephemeral=True,
             )
@@ -854,7 +859,7 @@ class RobEventCog(commands.Cog):
         elif webhook_url:
             lines.append(f"\n**Webhook URL:** `{webhook_url}`")
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             view=success_view("Handled.", "\n".join(lines)),
             ephemeral=True,
         )
@@ -877,14 +882,19 @@ class RobEventCog(commands.Cog):
             await interaction.response.send_message("That name is reserved. Pick another one.", ephemeral=True)
             return
 
+        # Defer before DB writes and leaderboard sync — those can exceed the
+        # 3-second interaction window.  All replies after this point must use
+        # interaction.followup.send().
+        await interaction.response.defer(ephemeral=True)
+
         existing = await self.database.get_event_sub_by_name(sub_name=sub_name)
         if existing is not None and existing.user_id != interaction.user.id:
-            await interaction.response.send_message("That name is taken already.", ephemeral=True)
+            await interaction.followup.send("That name is taken already.", ephemeral=True)
             return
 
         await self.database.save_event_sub(user_id=interaction.user.id, sub_name=sub_name)
         await self.sync_leaderboard_channel()
-        await interaction.response.send_message(
+        await interaction.followup.send(
             view=success_view(
                 "Handled.",
                 (
