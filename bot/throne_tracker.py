@@ -28,7 +28,13 @@ from bot.event_views import (
     format_timestamp,
 )
 from bot.ui.components import action_section, make_container, separator, simple_view, text_block
-from bot.throne_scraper import fetch_public_wishlist_items, fetch_recent_sends_with_status, normalize_throne_url
+from bot.throne_scraper import (
+    fetch_public_wishlist_items,
+    fetch_recent_sends_with_status,
+    normalize_throne_registration_input,
+    normalize_throne_url,
+    resolve_creator_info,
+)
 from bot.utils import has_admin_command_permissions, normalize_sender_name
 
 log = logging.getLogger(__name__)
