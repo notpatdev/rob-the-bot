@@ -468,6 +468,58 @@ throne() {
       _throne_warn "Historical sends in event_sends were NOT deleted (intentional)."
       ;;
 
+    webhook-rebuild)
+      local handle="${1:-}"
+      if [ -z "$handle" ]; then
+        _throne_error "usage: throne webhook-rebuild <handle>"
+        return 1
+      fi
+      if ! _rob_valid_handle "$handle"; then
+        _throne_error "handle must contain only letters, digits, hyphens, or underscores."
+        return 1
+      fi
+      local safe_handle
+      safe_handle="$(_rob_sql_escape "${handle}")"
+      # Look up the creator_id — comes from our own DB, safe to use.
+      local creator_id
+      creator_id=$(sudo sqlite3 "$DB" \
+        "SELECT throne_creator_id FROM throne_creators
+         WHERE LOWER(throne_handle) = LOWER('${safe_handle}') LIMIT 1;")
+      if [ -z "$creator_id" ]; then
+        _throne_error "No throne creator found for handle: ${handle}"
+        return 1
+      fi
+      # Generate a new secret (same method used by the bot itself).
+      local new_secret
+      new_secret=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+      if [ -z "$new_secret" ]; then
+        _throne_error "Failed to generate new webhook secret."
+        return 1
+      fi
+      local safe_secret
+      safe_secret="$(_rob_sql_escape "$new_secret")"
+      local safe_cid
+      safe_cid="$(_rob_sql_escape "$creator_id")"
+      # Rotate the secret and clear webhook_connected_at so the bot treats
+      # this as a brand-new webhook registration.
+      sudo sqlite3 "$DB" \
+        "UPDATE throne_creators
+         SET webhook_secret = '${safe_secret}',
+             webhook_connected_at = NULL
+         WHERE throne_creator_id = '${safe_cid}';"
+      local new_url="${BASE_URL}/throne/webhook/${creator_id}/${new_secret}"
+      _throne_header "Webhook Rebuilt: @${handle}"
+      _throne_ok "New secret generated and saved."
+      _throne_kv "Handle:"     "@${handle}"
+      _throne_kv "Creator ID:" "$creator_id"
+      echo
+      _throne_kv "New URL:" "$new_url"
+      echo
+      _throne_warn "You MUST update this URL in Throne's webhook settings."
+      _throne_warn "The old webhook URL will no longer work."
+      _throne_warn "Run 'rob restart' after updating Throne to reload the bot."
+      ;;
+
     *)
       printf '%s\n' \
         "${BOLD}throne — Rob the Bot shell helper${RESET}" \
@@ -479,8 +531,9 @@ throne() {
         "  throne refresh" \
         "  throne dommes" \
         "  throne subs" \
-        "  throne status   <handle>" \
-        "  throne url      <handle>" \
+        "  throne status         <handle>" \
+        "  throne url            <handle>" \
+        "  throne webhook-rebuild <handle>" \
         "  throne blacklist <discord_user_id>"
       [ -n "$cmd" ] && return 1 || return 0
       ;;
