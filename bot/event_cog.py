@@ -915,6 +915,11 @@ class RobEventCog(commands.Cog):
         if guild is None:
             return
         channel = guild.get_channel(self.config.leaderboard_channel_id)
+        if channel is None:
+            try:
+                channel = await guild.fetch_channel(self.config.leaderboard_channel_id)
+            except (discord.NotFound, discord.HTTPException):
+                channel = None
         if not isinstance(channel, discord.TextChannel):
             self._warn_once(
                 "leaderboard_channel_runtime",
