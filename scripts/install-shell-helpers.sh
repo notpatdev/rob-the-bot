@@ -489,9 +489,33 @@ if float(a) <= 0:
         _throne_error "amount_usd must be a positive number (e.g. 25 or 9.99)."
         return 1
       fi
+      if python3 -c "
+import sys
+a = sys.argv[1].strip()
+if '.' in a:
+    sys.exit(1)
+sys.exit(0 if int(a) >= 1000 else 1)
+" "${amount}" 2>/dev/null; then
+        _throne_error "amount_usd looks like cents (${amount}). Use USD with decimals (example: 466.00)."
+        return 1
+      fi
       local safe_sub=""
       if [ -n "$sub" ]; then
         safe_sub="$(_rob_sql_escape "${sub}")"
+      fi
+      local claimed_sub_sql="NULL"
+      if [ -n "$safe_sub" ]; then
+        local claimed_uid
+        claimed_uid=$(sudo sqlite3 "$DB" \
+          "SELECT user_id FROM event_subs
+           WHERE sub_name = '${safe_sub}' COLLATE NOCASE LIMIT 1;" 2>/dev/null || true)
+        if [ -n "$claimed_uid" ] && _rob_valid_uid "$claimed_uid"; then
+          claimed_sub_sql="${claimed_uid}"
+        fi
+      fi
+      local claimed_sub_display="(unclaimed)"
+      if [ "$claimed_sub_sql" != "NULL" ]; then
+        claimed_sub_display="$claimed_sub_sql"
       fi
       # Resolve the active event key (NULL when no event is running).
       local event_key
@@ -510,14 +534,14 @@ if float(a) <= 0:
       local send_id
       send_id=$(sudo sqlite3 "$DB" \
         "INSERT INTO event_sends
-           (domme_user_id, sub_name, amount_usd, item_name,
-            item_image_url, logged_by, sent_at, source,
-            is_private, seeded, event_key)
-         VALUES
-           (${uid}, ${sub_sql}, ${amount}, 'Admin-logged external send',
-            NULL, 0, datetime('now'), 'manual:admin',
-            0, 0, ${ek_sql});
-         SELECT last_insert_rowid();")
+           (domme_user_id, sub_name, claimed_sub_user_id, amount_usd, item_name,
+             item_image_url, logged_by, sent_at, source,
+             is_private, seeded, event_key)
+          VALUES
+           (${uid}, ${sub_sql}, ${claimed_sub_sql}, ${amount}, 'Admin-logged external send',
+             NULL, 0, datetime('now'), 'manual:admin',
+             0, 0, ${ek_sql});
+          SELECT last_insert_rowid();")
       if [ -z "$send_id" ]; then
         _throne_error "Insert failed — check the database path and permissions."
         return 1
@@ -527,9 +551,11 @@ if float(a) <= 0:
       _throne_kv "Discord UID:"  "${uid}"
       _throne_kv "Amount:"       "\$${amount}"
       _throne_kv "Sub:"          "${sub:-(none)}"
+      _throne_kv "Claimed sub UID:" "${claimed_sub_display}"
       _throne_kv "Event key:"    "${event_key:-(none)}"
       echo
       _throne_warn "Run 'rob restart' so the bot re-renders the leaderboard."
+      _throne_warn "Shell addsend writes directly to DB; it does not post a send-tracker card."
       ;;
 
     register-domme)

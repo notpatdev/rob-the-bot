@@ -1068,11 +1068,15 @@ class ThroneTrackerCog(commands.Cog):
 
         try:
             await self._post_send_card(domme_user_id, send_id)
+        except Exception:
+            log.exception("Failed to post send card for send id %s.", send_id)
+
+        try:
             event_cog = self.bot.get_cog("RobEventCog")
             if event_cog is not None:
                 await event_cog.sync_leaderboard_channel()
         except Exception:
-            log.exception("Failed to post send notification for send id %s.", send_id)
+            log.exception("Failed to sync leaderboard after send id %s.", send_id)
 
         return send_id, send_public_id
 
@@ -1083,6 +1087,11 @@ class ThroneTrackerCog(commands.Cog):
         if guild is None:
             return
         channel = guild.get_channel(self.config.send_track_channel_id)
+        if channel is None:
+            try:
+                channel = await guild.fetch_channel(self.config.send_track_channel_id)
+            except (discord.NotFound, discord.HTTPException):
+                channel = None
         if not isinstance(channel, discord.TextChannel):
             self._warn_once(
                 "send_track_channel_runtime",
