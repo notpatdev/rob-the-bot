@@ -468,6 +468,70 @@ throne() {
       _throne_warn "Historical sends in event_sends were NOT deleted (intentional)."
       ;;
 
+    addsend)
+      local uid="${1:-}" amount="${2:-}" sub="${3:-}"
+      if [ -z "$uid" ] || [ -z "$amount" ]; then
+        _throne_error "usage: throne addsend <discord_user_id> <amount_usd> [sub_name]"
+        return 1
+      fi
+      if ! _rob_valid_uid "$uid"; then
+        _throne_error "discord_user_id must be a 17-19 digit integer."
+        return 1
+      fi
+      if ! python3 -c "
+import sys, re
+a = sys.argv[1]
+if not re.match(r'^[0-9]+(\.[0-9]+)?$', a):
+    sys.exit(1)
+if float(a) <= 0:
+    sys.exit(1)
+" "${amount}" 2>/dev/null; then
+        _throne_error "amount_usd must be a positive number (e.g. 25 or 9.99)."
+        return 1
+      fi
+      local safe_sub=""
+      if [ -n "$sub" ]; then
+        safe_sub="$(_rob_sql_escape "${sub}")"
+      fi
+      # Resolve the active event key (NULL when no event is running).
+      local event_key
+      event_key=$(sudo sqlite3 "$DB" \
+        "SELECT event_key FROM event_state WHERE is_active = 1 LIMIT 1;" 2>/dev/null || true)
+      local ek_sql="NULL"
+      if [ -n "$event_key" ]; then
+        local safe_ek
+        safe_ek="$(_rob_sql_escape "${event_key}")"
+        ek_sql="'${safe_ek}'"
+      fi
+      local sub_sql="NULL"
+      if [ -n "$safe_sub" ]; then
+        sub_sql="'${safe_sub}'"
+      fi
+      local send_id
+      send_id=$(sudo sqlite3 "$DB" \
+        "INSERT INTO event_sends
+           (domme_user_id, sub_name, amount_usd, item_name,
+            item_image_url, logged_by, sent_at, source,
+            is_private, seeded, event_key)
+         VALUES
+           (${uid}, ${sub_sql}, ${amount}, 'Admin-logged external send',
+            NULL, 0, datetime('now'), 'manual:admin',
+            0, 0, ${ek_sql});
+         SELECT last_insert_rowid();")
+      if [ -z "$send_id" ]; then
+        _throne_error "Insert failed — check the database path and permissions."
+        return 1
+      fi
+      _throne_header "Send Added"
+      _throne_ok "Send logged (ID #${send_id})."
+      _throne_kv "Discord UID:"  "${uid}"
+      _throne_kv "Amount:"       "\$${amount}"
+      _throne_kv "Sub:"          "${sub:-(none)}"
+      _throne_kv "Event key:"    "${event_key:-(none)}"
+      echo
+      _throne_warn "Run 'rob restart' so the bot re-renders the leaderboard."
+      ;;
+
     webhook-rebuild)
       local handle="${1:-}"
       if [ -z "$handle" ]; then
@@ -525,6 +589,7 @@ throne() {
         "${BOLD}throne — Rob the Bot shell helper${RESET}" \
         "" \
         "Usage:" \
+        "  throne addsend  <discord_user_id> <amount_usd> [sub_name]" \
         "  throne sends    <handle>" \
         "  throne wishlist <handle>" \
         "  throne fix-send <handle> <send_id> <amount_cents>" \
