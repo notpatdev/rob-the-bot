@@ -728,6 +728,62 @@ class ThroneTrackerCog(commands.Cog):
             posted += 1
         return posted
 
+    async def record_send(
+        self,
+        *,
+        domme_user_id: int,
+        sub_name: str | None,
+        amount_usd: float,
+        item_name: str | None,
+        item_image_url: str | None,
+        source: str | None,
+        is_private: bool = False,
+        sent_at: str | None = None,
+        event_key: str | None = None,
+        external_id: str | None = None,
+        event_id: str | None = None,
+        fallback_event_hash: str | None = None,
+        seeded: bool = False,
+    ) -> tuple[int, str] | None:
+        send_id = await self.database.log_event_send(
+            domme_user_id=domme_user_id,
+            sub_name=sub_name,
+            amount_usd=amount_usd,
+            item_name=item_name,
+            item_image_url=item_image_url,
+            logged_by=self.bot.user.id if self.bot.user else 0,
+            external_id=external_id,
+            event_id=event_id,
+            fallback_event_hash=fallback_event_hash,
+            source=source,
+            is_private=is_private,
+            seeded=seeded,
+            sent_at=sent_at,
+            event_key=event_key,
+        )
+        if send_id is None:
+            return None
+
+        send = await self.database.get_event_send(send_id=send_id)
+        if send is None:
+            return None
+
+        send_public_id = self._public_send_id(
+            send_id=send.id,
+            domme_user_id=domme_user_id,
+            sent_at=send.sent_at,
+        )
+
+        try:
+            await self._post_send_card(domme_user_id, send_id)
+            event_cog = self.bot.get_cog("RobEventCog")
+            if event_cog is not None:
+                await event_cog.sync_leaderboard_channel()
+        except Exception:
+            log.exception("Failed to post send notification for send id %s.", send_id)
+
+        return send_id, send_public_id
+
     async def _post_send_card(self, domme_user_id: int, send_id: int) -> None:
         if not self.config.send_track_channel_id:
             return

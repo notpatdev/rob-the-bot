@@ -42,6 +42,10 @@ Slash commands:
   Register a Domme Throne profile for live tracking.
 - `/register action:sub`
   Register a Sub sending name so sends can be claimed on the leaderboard.
+- `/add amount:<usd> method:<cashapp|venmo|paypal|onlyfans|loyalfans|youpay|other> [sub] [note]`
+  Domme-only manual send logging (non-webhook sends).
+- `/sendrequest domme:@user amount:<usd> method:<cashapp|venmo|paypal|onlyfans|loyalfans|youpay|other|throne> [note]`
+  Ask a domme to review and optionally log a send request.
 
 ## Configuration
 

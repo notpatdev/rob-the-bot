@@ -198,6 +198,33 @@ class EventSend:
         )
 
 
+@dataclass(frozen=True)
+class SendRequest:
+    id: int
+    sub_user_id: int
+    domme_user_id: int
+    amount_usd: float
+    method: str
+    note: str | None
+    status: str
+    created_at: str
+    resolved_at: str | None
+
+    @classmethod
+    def from_row(cls, row: aiosqlite.Row) -> "SendRequest":
+        return cls(
+            id=int(row["id"]),
+            sub_user_id=int(row["sub_user_id"]),
+            domme_user_id=int(row["domme_user_id"]),
+            amount_usd=float(row["amount_usd"]),
+            method=str(row["method"]),
+            note=row["note"],
+            status=str(row["status"]),
+            created_at=str(row["created_at"]),
+            resolved_at=row["resolved_at"],
+        )
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -290,6 +317,18 @@ class Database:
                 created_by TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS send_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sub_user_id INTEGER NOT NULL,
+                domme_user_id INTEGER NOT NULL,
+                amount_usd REAL NOT NULL,
+                method TEXT NOT NULL,
+                note TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                resolved_at TEXT
+            );
+
             CREATE UNIQUE INDEX IF NOT EXISTS idx_event_sends_external_id
             ON event_sends(external_id)
             WHERE external_id IS NOT NULL;
@@ -302,6 +341,9 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_event_sends_event_key
             ON event_sends(event_key);
+
+            CREATE INDEX IF NOT EXISTS idx_send_requests_rate_limit
+            ON send_requests(sub_user_id, domme_user_id, created_at);
 
             CREATE TABLE IF NOT EXISTS throne_creators (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1430,3 +1472,88 @@ class Database:
         )
         await self.connection.commit()
         return creator.throne_creator_id
+
+    async def create_send_request(
+        self,
+        *,
+        sub_user_id: int,
+        domme_user_id: int,
+        amount_usd: float,
+        method: str,
+        note: str | None,
+        created_at: str | None = None,
+    ) -> int:
+        async with self.connection.execute(
+            """
+            INSERT INTO send_requests (
+                sub_user_id,
+                domme_user_id,
+                amount_usd,
+                method,
+                note,
+                status,
+                created_at,
+                resolved_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL)
+            """,
+            (
+                sub_user_id,
+                domme_user_id,
+                amount_usd,
+                method,
+                note,
+                created_at or _utc_now(),
+            ),
+        ) as cursor:
+            request_id = int(cursor.lastrowid)
+        await self.connection.commit()
+        return request_id
+
+    async def count_send_requests_since(
+        self,
+        *,
+        sub_user_id: int,
+        domme_user_id: int,
+        since: str,
+    ) -> int:
+        async with self.connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM send_requests
+            WHERE sub_user_id = ?
+              AND domme_user_id = ?
+              AND created_at >= ?
+            """,
+            (sub_user_id, domme_user_id, since),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return int(row["count"]) if row is not None else 0
+
+    async def get_send_request(self, *, request_id: int) -> SendRequest | None:
+        async with self.connection.execute(
+            "SELECT * FROM send_requests WHERE id = ?",
+            (request_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return SendRequest.from_row(row)
+
+    async def resolve_send_request(self, *, request_id: int, status: str, resolved_at: str | None = None) -> None:
+        await self.connection.execute(
+            """
+            UPDATE send_requests
+            SET status = ?, resolved_at = ?
+            WHERE id = ?
+            """,
+            (status, resolved_at or _utc_now(), request_id),
+        )
+        await self.connection.commit()
+
+    async def delete_send_request(self, *, request_id: int) -> None:
+        await self.connection.execute(
+            "DELETE FROM send_requests WHERE id = ?",
+            (request_id,),
+        )
+        await self.connection.commit()

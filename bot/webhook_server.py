@@ -596,27 +596,32 @@ class ThroneWebhookServer:
             if ctx is not None and ctx.is_event_active:
                 event_key = ctx.event_key
 
-        # 11. Insert into event_sends — dedup via unique indexes.
-        send_id = await self.database.log_event_send(
+        tracker_cog = self.bot.get_cog("ThroneTrackerCog")
+        if tracker_cog is None:
+            log.warning("Webhook received send but ThroneTrackerCog is unavailable.")
+            return web.Response(status=503, text="Tracker unavailable")
+
+        # 11. Insert + notify + leaderboard refresh.
+        result = await tracker_cog.record_send(
             domme_user_id=domme_user_id,
             sub_name=normalize_sender_name(fields["gifter_username"]),
             amount_usd=amount_usd,
             item_name=fields["item_name"],
             item_image_url=fields["item_image_url"],
-            logged_by=self.bot.user.id if self.bot.user else 0,
+            source="webhook",
+            is_private=is_private,
+            sent_at=fields["purchased_at"],
+            event_key=event_key,
             external_id=None,
             event_id=event_id or None,
             fallback_event_hash=fallback_event_hash,
-            source="webhook",
-            is_private=is_private,
             seeded=False,
-            sent_at=fields["purchased_at"],
-            event_key=event_key,
         )
 
-        if send_id is None:
+        if result is None:
             # Duplicate.
             return web.json_response({"ok": True, "duplicate": True})
+        send_id, _ = result
 
         # 12. Update throne_creators tracking state.
         now_str = _utc_now()
@@ -626,22 +631,5 @@ class ThroneWebhookServer:
             last_successful_event_at=now_str,
         )
 
-        # 13. Schedule Discord notification without blocking the response.
-        import asyncio
-        asyncio.create_task(self._post_send_notification(domme_user_id, send_id))
-
-        # 14. Return success.
-        return web.json_response({"ok": True, "inserted": True})
-
-    async def _post_send_notification(self, domme_user_id: int, send_id: int) -> None:
-        """Post send card and sync leaderboard. Runs in a task, never raises."""
-        try:
-            tracker_cog = self.bot.get_cog("ThroneTrackerCog")
-            if tracker_cog is not None:
-                await tracker_cog._post_send_card(domme_user_id, send_id)
-
-            event_cog = self.bot.get_cog("RobEventCog")
-            if event_cog is not None:
-                await event_cog.sync_leaderboard_channel()
-        except Exception:
-            log.exception("Failed to post webhook send notification for send_id=%s", send_id)
+        # 13. Return success.
+        return web.json_response({"ok": True, "inserted": True, "send_id": send_id})
