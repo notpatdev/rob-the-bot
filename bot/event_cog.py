@@ -55,6 +55,8 @@ _SEND_REQUEST_ADD_HINT_TEMPLATE = (
 # Carl-bot warn DM detection
 _CARLBOT_WARN_TITLE_RE = re.compile(r"warn\s*\|\s*case", re.IGNORECASE)
 _USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
+_WARNED_USER_FIELD_HINTS = ("offender", "warned", "user", "member", "target")
+_MODERATOR_FIELD_HINTS = ("moderator", "mod", "staff", "issuer")
 _MAX_PROCESSED_WARN_MESSAGES = 500
 
 
@@ -567,6 +569,41 @@ class RobEventCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
+        await self._process_carlbot_warn_message(message)
+
+    @commands.Cog.listener()
+    async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        _ = before
+        await self._process_carlbot_warn_message(after)
+
+    @staticmethod
+    def _extract_warned_user_id_from_embed(embed: discord.Embed) -> int | None:
+        """Return warned user ID using field hints, then non-moderator mention, then description."""
+        first_non_moderator_mention: int | None = None
+        for field in embed.fields:
+            field_name = (field.name or "").strip().lower()
+            field_value = field.value or ""
+            mention_match = _USER_MENTION_RE.search(field_value)
+            if not mention_match:
+                continue
+
+            user_id = int(mention_match.group(1))
+            if any(token in field_name for token in _MODERATOR_FIELD_HINTS):
+                continue
+            if any(token in field_name for token in _WARNED_USER_FIELD_HINTS):
+                return user_id
+            if first_non_moderator_mention is None:
+                first_non_moderator_mention = user_id
+
+        if first_non_moderator_mention is not None:
+            return first_non_moderator_mention
+
+        description_match = _USER_MENTION_RE.search(embed.description or "")
+        if description_match:
+            return int(description_match.group(1))
+        return None
+
+    async def _process_carlbot_warn_message(self, message: discord.Message) -> None:
         if not self.config.warn_log_channel_id or not self.config.carlbot_user_id:
             return
         if message.channel.id != self.config.warn_log_channel_id:
@@ -581,13 +618,7 @@ class RobEventCog(commands.Cog):
             if not _CARLBOT_WARN_TITLE_RE.search(title):
                 continue
 
-            warned_user_id: int | None = None
-            for field in embed.fields:
-                if field.name and field.name.strip().lower() == "offender":
-                    m = _USER_MENTION_RE.search(field.value or "")
-                    if m:
-                        warned_user_id = int(m.group(1))
-                    break
+            warned_user_id = self._extract_warned_user_id_from_embed(embed)
 
             if warned_user_id is None:
                 log.warning(
