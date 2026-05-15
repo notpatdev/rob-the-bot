@@ -572,12 +572,13 @@ class RobEventCog(commands.Cog):
         await self._process_carlbot_warn_message(message)
 
     @commands.Cog.listener()
-    async def on_message_edit(self, _before: discord.Message, after: discord.Message) -> None:
+    async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        _ = before
         await self._process_carlbot_warn_message(after)
 
     @staticmethod
     def _extract_warned_user_id_from_embed(embed: discord.Embed) -> int | None:
-        """Extract warned user mention with field-hint priority and safe fallbacks."""
+        """Return warned user ID using field hints, then non-moderator mention, then description."""
         first_non_moderator_mention: int | None = None
         for field in embed.fields:
             field_name = (field.name or "").strip().lower()
