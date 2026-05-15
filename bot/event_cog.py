@@ -635,14 +635,14 @@ class RobEventCog(commands.Cog):
 
     async def _send_warn_dm(self, user_id: int, message_url: str) -> None:
         dm_text = (
-            "⚠️ You've been warned! ⚠️\n\n"
-            "Hey!\n\n"
-            "This is a courtesy notification to inform you that you have been warned "
-            "by a moderator in the VIB server.\n\n"
-            f"View the details via {message_url}\n\n"
-            "**NOTE: YOU HAVE NOT BEEN BANNED, ONLY WARNED**\n\n"
-            "Have a fantastic day!\n\n"
-            "-# Very Important B*tches"
+            "> ## ⚠️ You've been warned! ⚠️\n\n"
+            "> Hey!\n\n"
+            "> This is a courtesy notification to inform you that you have been warned "
+            "> by a moderator in the VIB server.\n\n"
+            f"> View the details via {message_url}\n\n"
+            "> **NOTE: YOU HAVE NOT BEEN BANNED, ONLY WARNED**\n\n"
+            "> Have a fantastic day!\n\n"
+            "> -# Very Important B*tches"
         )
         try:
             user = self.bot.get_user(user_id)
