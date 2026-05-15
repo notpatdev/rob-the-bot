@@ -6,6 +6,7 @@ import logging
 import random
 import re
 import secrets
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -54,6 +55,7 @@ _SEND_REQUEST_ADD_HINT_TEMPLATE = (
 # Carl-bot warn DM detection
 _CARLBOT_WARN_TITLE_RE = re.compile(r"warn\s*\|\s*case", re.IGNORECASE)
 _USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
+_MAX_PROCESSED_WARN_MESSAGES = 500
 
 
 class SendRequestDecisionView(discord.ui.View):
@@ -173,7 +175,7 @@ class RobEventCog(commands.Cog):
         self._lifecycle_lock = asyncio.Lock()
         self._overlap_warning_keys: tuple[str, ...] | None = None
         self._warned_runtime_targets: set[str] = set()
-        self._processed_warn_message_ids: set[int] = set()
+        self._processed_warn_message_ids: deque[int] = deque(maxlen=_MAX_PROCESSED_WARN_MESSAGES)
         self.events_config: EventsConfig = load_events_config(self.config.events_config_path)
         self.status_loop.start()
         self.event_lifecycle_loop.start()
@@ -594,10 +596,8 @@ class RobEventCog(commands.Cog):
                 )
                 break
 
-            # Bound the duplicate guard to avoid unbounded memory growth
-            if len(self._processed_warn_message_ids) >= 500:
-                self._processed_warn_message_ids.clear()
-            self._processed_warn_message_ids.add(message.id)
+            # deque(maxlen=_MAX_PROCESSED_WARN_MESSAGES) auto-evicts oldest entry when full
+            self._processed_warn_message_ids.append(message.id)
 
             await self._send_warn_dm(warned_user_id, message.jump_url)
             break
