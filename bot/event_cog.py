@@ -572,7 +572,8 @@ class RobEventCog(commands.Cog):
         await self._process_carlbot_warn_message(message)
 
     @commands.Cog.listener()
-    async def on_message_edit(self, _: discord.Message, after: discord.Message) -> None:
+    async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        del before
         await self._process_carlbot_warn_message(after)
 
     @staticmethod
@@ -580,7 +581,8 @@ class RobEventCog(commands.Cog):
         first_non_moderator_mention: int | None = None
         for field in embed.fields:
             field_name = (field.name or "").strip().lower()
-            mention_match = _USER_MENTION_RE.search(field.value or "")
+            field_value = field.value or ""
+            mention_match = _USER_MENTION_RE.search(field_value)
             if not mention_match:
                 continue
 
