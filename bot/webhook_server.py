@@ -20,15 +20,16 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
+import discord
 from aiohttp import web
 
 from bot.config import BotConfig
 from bot.database import Database, ThroneWishlistItem
+from bot.event_views import BroadcastNotificationView
 from bot.throne_scraper import WishlistItemRecord, fetch_public_wishlist_items, match_wishlist_item_price
 from bot.utils import normalize_sender_name
 
 if TYPE_CHECKING:
-    import discord
     from discord.ext import commands
 
 log = logging.getLogger(__name__)
@@ -372,6 +373,8 @@ class ThroneWebhookServer:
         app = web.Application()
         app.router.add_get("/health", self._handle_health)
         app.router.add_post("/throne/webhook/{creator_id}/{secret}", self._handle_webhook)
+        app.router.add_post("/admin/maintenance", self._handle_admin_maintenance)
+        app.router.add_post("/admin/broadcast", self._handle_admin_broadcast)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         self._site = web.TCPSite(
@@ -635,3 +638,115 @@ class ThroneWebhookServer:
         return web.json_response(
             {"ok": True, "inserted": True, "send_id": send_id, "send_public_id": send_public_id}
         )
+
+    # ── Admin endpoints ─────────────────────────────────────────────────────
+
+    def _check_admin_auth(self, request: web.Request) -> bool:
+        """Validate the admin bearer token against ROB_ADMIN_TOKEN."""
+        expected = (os.getenv("ROB_ADMIN_TOKEN") or "").strip()
+        if not expected:
+            log.error("Admin endpoint hit but ROB_ADMIN_TOKEN is not configured; denying.")
+            return False
+        header = request.headers.get("Authorization", "")
+        provided = ""
+        if header.lower().startswith("bearer "):
+            provided = header[7:].strip()
+        else:
+            provided = request.headers.get("X-Admin-Token", "").strip()
+        if not provided:
+            return False
+        return hmac.compare_digest(provided, expected)
+
+    async def _handle_admin_maintenance(self, request: web.Request) -> web.Response:
+        if not self._check_admin_auth(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        if not isinstance(payload, dict) or "active" not in payload:
+            return web.json_response(
+                {"ok": False, "error": "missing 'active' boolean"}, status=400
+            )
+        active = bool(payload.get("active"))
+        self.bot.maintenance_mode = active
+        log.warning("Maintenance mode set to %s via admin endpoint.", active)
+
+        event_cog = self.bot.get_cog("RobEventCog")
+        if event_cog is not None:
+            try:
+                await event_cog.sync_leaderboard_channel()
+            except Exception:  # noqa: BLE001 - never let UI sync block the response
+                log.exception("Failed to sync leaderboard after maintenance toggle.")
+
+        return web.json_response({"ok": True, "maintenance_mode": active})
+
+    async def _handle_admin_broadcast(self, request: web.Request) -> web.Response:
+        if not self._check_admin_auth(request):
+            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"ok": False, "error": "invalid payload"}, status=400)
+
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            return web.json_response(
+                {"ok": False, "error": "missing 'message'"}, status=400
+            )
+        raw_url = payload.get("url")
+        action_url = str(raw_url).strip() if raw_url else None
+        if action_url and not (action_url.startswith("http://") or action_url.startswith("https://")):
+            return web.json_response(
+                {"ok": False, "error": "url must be http(s)"}, status=400
+            )
+
+        view = BroadcastNotificationView(
+            title="📣 Rob | Broadcast",
+            message=message,
+            action_url=action_url or None,
+        )
+
+        # Prefer an explicit broadcast channel id if configured, else DM the bot owner.
+        target_channel_id_raw = (os.getenv("ROB_BROADCAST_CHANNEL_ID") or "").strip()
+        target_channel_id: int | None = None
+        if target_channel_id_raw:
+            try:
+                target_channel_id = int(target_channel_id_raw)
+            except ValueError:
+                log.warning(
+                    "ROB_BROADCAST_CHANNEL_ID=%r is not an integer; ignoring.",
+                    target_channel_id_raw,
+                )
+
+        delivered_to: str | None = None
+        try:
+            if target_channel_id is not None:
+                channel = self.bot.get_channel(target_channel_id)
+                if channel is None:
+                    channel = await self.bot.fetch_channel(target_channel_id)
+                if not hasattr(channel, "send"):
+                    return web.json_response(
+                        {"ok": False, "error": "broadcast channel is not sendable"},
+                        status=500,
+                    )
+                await channel.send(view=view)
+                delivered_to = f"channel:{target_channel_id}"
+            else:
+                app_info = await self.bot.application_info()
+                owner = app_info.owner
+                if owner is None:
+                    return web.json_response(
+                        {"ok": False, "error": "no owner resolvable"}, status=500
+                    )
+                await owner.send(view=view)
+                delivered_to = f"owner:{owner.id}"
+        except discord.HTTPException:
+            log.exception("Failed to deliver broadcast notification.")
+            return web.json_response(
+                {"ok": False, "error": "discord delivery failed"}, status=502
+            )
+
+        return web.json_response({"ok": True, "delivered_to": delivered_to})

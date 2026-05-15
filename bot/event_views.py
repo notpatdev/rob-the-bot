@@ -59,15 +59,19 @@ def _send_suffix(count: int) -> str:
 def _render_rows(rows: list[tuple[str, float, int]]) -> str:
     lines: list[str] = []
     for index, (label, total, sends) in enumerate(rows, 1):
-        lines.append(f"{_medal(index)} {label}\n**{format_money(total)}** · {sends} {_send_suffix(sends)}")
-    return "\n\n".join(lines)
+        lines.append(
+            f"> {_medal(index)} **{label}** — {format_money(total)} ({sends} {_send_suffix(sends)})"
+        )
+    return "\n".join(lines)
 
 
 def _render_unclaimed_rows(rows: list[tuple[str, float, int]]) -> str:
     lines: list[str] = []
     for label, total, sends in rows:
-        lines.append(f"**{label}**\n{format_money(total)} · {sends} {_send_suffix(sends)}")
-    return "\n\n".join(lines)
+        lines.append(
+            f"> 👻 **{label}** — {format_money(total)} ({sends} {_send_suffix(sends)})"
+        )
+    return "\n".join(lines)
 
 
 class DommeSignupModal(discord.ui.Modal, title="Domme Sign-Up"):
@@ -208,6 +212,65 @@ class LeaderboardView(discord.ui.LayoutView):
             return
         log.error("Leaderboard register button received unsupported type: %s", self.register_kind)
         await interaction.response.send_message("Rob lost track of that button. Try again in a sec.", ephemeral=True)
+
+
+class MaintenanceView(discord.ui.LayoutView):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        body = (
+            "## Rob is under maintenance \n\n"
+            " Sorry! Rob is undergoing some maintenance to help keep him online and functional. \n\n"
+            " During this time, Rob will be unavailable for use and the leaderboard and send tracking will be offline."
+            " However fear not, once maintenance is over. the leaderboard and any sends made during this time will be caught back up."
+        )
+        self.add_item(
+            make_container(
+                "🛠️ Rob | System Maintenance",
+                None,
+                sections=[separator(), text_block(body)],
+                accent_color=_COLOR_ADMIN,
+            )
+        )
+
+
+class OfflineView(discord.ui.LayoutView):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            make_container(
+                "🛠️ Sub Leaderboard",
+                "Offline for maintenance.",
+                accent_color=_COLOR_ADMIN,
+            )
+        )
+
+
+class BroadcastNotificationView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        *,
+        title: str,
+        message: str,
+        action_url: str | None = None,
+    ) -> None:
+        super().__init__(timeout=None)
+        sections: list[discord.ui.Item] = [separator(), text_block(message)]
+        if action_url:
+            link_button = discord.ui.Button(
+                label="Open Link",
+                style=discord.ButtonStyle.link,
+                url=action_url,
+            )
+            sections.append(separator())
+            sections.append(action_section("More info / take action:", link_button))
+        self.add_item(
+            make_container(
+                title,
+                None,
+                sections=sections,
+                accent_color=_COLOR_INFO,
+            )
+        )
 
 
 class SendNotificationView(discord.ui.LayoutView):

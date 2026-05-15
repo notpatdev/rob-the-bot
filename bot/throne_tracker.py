@@ -1184,6 +1184,13 @@ class ThroneTrackerCog(commands.Cog):
         footer = f"Please enjoy this send equally | {format_timestamp(send.sent_at)}"
         send_public_id = self._public_send_id(send_id=send.id, domme_user_id=domme_user_id, sent_at=send.sent_at)
 
+        if getattr(self.bot, "maintenance_mode", False):
+            log.info(
+                "Skipping send notification post for send id %s while bot is in maintenance mode.",
+                send_id,
+            )
+            return
+
         try:
             await channel.send(
                 view=SendNotificationView(

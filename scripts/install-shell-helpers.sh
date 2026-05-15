@@ -708,6 +708,88 @@ print(urlunparse(('https', h, path, '', '', '')))
       _throne_warn "Run 'rob restart' after updating Throne to reload the bot."
       ;;
 
+    maintenance)
+      local mode="${1:-}"
+      if [ -z "$mode" ] || { [ "$mode" != "on" ] && [ "$mode" != "off" ]; }; then
+        _throne_error "usage: throne maintenance <on|off>"
+        return 1
+      fi
+      local token="${ROB_ADMIN_TOKEN:-}"
+      if [ -z "$token" ]; then
+        _throne_error "ROB_ADMIN_TOKEN is not set in this shell."
+        return 1
+      fi
+      local active="true"
+      [ "$mode" = "off" ] && active="false"
+      local response
+      response=$(curl -sS -w '\n%{http_code}' \
+        -X POST "${BASE_URL}/admin/maintenance" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        --data "{\"active\": ${active}}") || {
+          _throne_error "curl failed to reach ${BASE_URL}/admin/maintenance"
+          return 1
+        }
+      local status_code body
+      status_code="${response##*$'\n'}"
+      body="${response%$'\n'*}"
+      if [ "$status_code" = "200" ]; then
+        _throne_ok "Maintenance mode → ${mode}"
+        [ -n "$body" ] && echo "$body"
+      else
+        _throne_error "Server returned HTTP ${status_code}"
+        [ -n "$body" ] && echo "$body" >&2
+        return 1
+      fi
+      ;;
+
+    broadcast)
+      local message="${1:-}"
+      local url="${2:-}"
+      if [ -z "$message" ]; then
+        _throne_error "usage: throne broadcast \"<message>\" [url]"
+        return 1
+      fi
+      local token="${ROB_ADMIN_TOKEN:-}"
+      if [ -z "$token" ]; then
+        _throne_error "ROB_ADMIN_TOKEN is not set in this shell."
+        return 1
+      fi
+      # Use python3 to safely build JSON so quotes/newlines in $message can't break it.
+      local payload
+      payload=$(MESSAGE="$message" URL="$url" python3 -c '
+import json, os
+data = {"message": os.environ.get("MESSAGE", "")}
+u = os.environ.get("URL", "")
+if u:
+    data["url"] = u
+print(json.dumps(data))
+') || {
+        _throne_error "Failed to build JSON payload."
+        return 1
+      }
+      local response
+      response=$(curl -sS -w '\n%{http_code}' \
+        -X POST "${BASE_URL}/admin/broadcast" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        --data "$payload") || {
+          _throne_error "curl failed to reach ${BASE_URL}/admin/broadcast"
+          return 1
+        }
+      local status_code body
+      status_code="${response##*$'\n'}"
+      body="${response%$'\n'*}"
+      if [ "$status_code" = "200" ]; then
+        _throne_ok "Broadcast delivered."
+        [ -n "$body" ] && echo "$body"
+      else
+        _throne_error "Server returned HTTP ${status_code}"
+        [ -n "$body" ] && echo "$body" >&2
+        return 1
+      fi
+      ;;
+
     *)
       printf '%s\n' \
         "${BOLD}throne — Rob the Bot shell helper${RESET}" \
@@ -725,7 +807,9 @@ print(urlunparse(('https', h, path, '', '', '')))
         "  throne status         <handle>" \
         "  throne url            <handle>" \
         "  throne webhook-rebuild <handle>" \
-        "  throne blacklist <discord_user_id>"
+        "  throne blacklist <discord_user_id>" \
+        "  throne maintenance <on|off>" \
+        "  throne broadcast \"<message>\" [url]"
       [ -n "$cmd" ] && return 1 || return 0
       ;;
   esac
