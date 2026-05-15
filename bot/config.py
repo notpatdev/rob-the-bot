@@ -48,6 +48,9 @@ class BotConfig:
     throne_webhook_signature_header: str
     throne_webhook_signed_message_format: str
     throne_webhook_max_timestamp_skew_seconds: int
+    # Carl-bot warn DM feature (optional)
+    warn_log_channel_id: int
+    carlbot_user_id: int
 
 
 _DEFAULT_THRONE_USER_AGENT = (
@@ -90,7 +93,12 @@ def _load_channel_id(name: str) -> int:
     if value < 0:
         log.warning("bot/channels.py has a negative %s value %r. Rob will treat it as 0.", name, raw)
         return 0
-    if value == 0 and name != "EVENT_BAN_ROLE_ID" and name != "EVENT_REPORT_CHANNEL_ID":
+    if value == 0 and name not in {
+        "EVENT_BAN_ROLE_ID",
+        "EVENT_REPORT_CHANNEL_ID",
+        "WARN_LOG_CHANNEL_ID",
+        "CARLBOT_USER_ID",
+    }:
         log.warning("bot/channels.py is missing %s. Some Discord features will stay offline.", name)
     return value
 
@@ -160,4 +168,6 @@ def load_config() -> BotConfig:
         throne_webhook_max_timestamp_skew_seconds=_env_int(
             "THRONE_WEBHOOK_MAX_TIMESTAMP_SKEW_SECONDS", 300, minimum=0
         ),
+        warn_log_channel_id=_load_channel_id("WARN_LOG_CHANNEL_ID"),
+        carlbot_user_id=_load_channel_id("CARLBOT_USER_ID"),
     )

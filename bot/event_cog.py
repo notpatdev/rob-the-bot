@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import secrets
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -49,6 +51,11 @@ _SEND_REQUEST_ADD_HINT_TEMPLATE = (
     "If this is real, run `/add amount:{amount:.2f} method:{method} sub:{sub}` "
     "to log it on the leaderboard {hint}"
 )
+
+# Carl-bot warn DM detection
+_CARLBOT_WARN_TITLE_RE = re.compile(r"warn\s*\|\s*case", re.IGNORECASE)
+_USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
+_MAX_PROCESSED_WARN_MESSAGES = 500
 
 
 class SendRequestDecisionView(discord.ui.View):
@@ -168,6 +175,7 @@ class RobEventCog(commands.Cog):
         self._lifecycle_lock = asyncio.Lock()
         self._overlap_warning_keys: tuple[str, ...] | None = None
         self._warned_runtime_targets: set[str] = set()
+        self._processed_warn_message_ids: deque[int] = deque(maxlen=_MAX_PROCESSED_WARN_MESSAGES)
         self.events_config: EventsConfig = load_events_config(self.config.events_config_path)
         self.status_loop.start()
         self.event_lifecycle_loop.start()
@@ -547,15 +555,74 @@ class RobEventCog(commands.Cog):
             f"`{discord_user_id}` has been removed from the blacklist.",
             mention_author=False,
         )
-    
-        async def _check_admin_context(self, ctx: commands.Context[commands.Bot]) -> bool:
-            if ctx.guild is None or not isinstance(ctx.author, discord.Member):
-                await ctx.reply("Server only.", mention_author=False)
-                return False
-            if not has_admin_command_permissions(ctx.author, self.config):
-                await ctx.reply("Nope. Not for you.", mention_author=False)
-                return False
-            return True
+
+    async def _check_admin_context(self, ctx: commands.Context[commands.Bot]) -> bool:
+        if ctx.guild is None or not isinstance(ctx.author, discord.Member):
+            await ctx.reply("Server only.", mention_author=False)
+            return False
+        if not has_admin_command_permissions(ctx.author, self.config):
+            await ctx.reply("Nope. Not for you.", mention_author=False)
+            return False
+        return True
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if not self.config.warn_log_channel_id or not self.config.carlbot_user_id:
+            return
+        if message.channel.id != self.config.warn_log_channel_id:
+            return
+        if message.author.id != self.config.carlbot_user_id:
+            return
+        if message.id in self._processed_warn_message_ids:
+            return
+
+        for embed in message.embeds:
+            title = embed.title or ""
+            if not _CARLBOT_WARN_TITLE_RE.search(title):
+                continue
+
+            warned_user_id: int | None = None
+            for field in embed.fields:
+                if field.name and field.name.strip().lower() == "offender":
+                    m = _USER_MENTION_RE.search(field.value or "")
+                    if m:
+                        warned_user_id = int(m.group(1))
+                    break
+
+            if warned_user_id is None:
+                log.warning(
+                    "Carl-bot warn detected in message %s but could not extract warned user from embed.",
+                    message.id,
+                )
+                break
+
+            # deque(maxlen=_MAX_PROCESSED_WARN_MESSAGES) auto-evicts oldest entry when full
+            self._processed_warn_message_ids.append(message.id)
+
+            await self._send_warn_dm(warned_user_id, message.jump_url)
+            break
+
+    async def _send_warn_dm(self, user_id: int, message_url: str) -> None:
+        dm_text = (
+            "⚠️ You've been warned! ⚠️\n\n"
+            "Hey!\n\n"
+            "This is a courtesy notification to inform you that you have been warned "
+            "by a moderator in the VIB server.\n\n"
+            f"View the details via {message_url}\n\n"
+            "**NOTE: YOU HAVE NOT BEEN BANNED, ONLY WARNED**\n\n"
+            "Have a fantastic day!\n\n"
+            "-# Very Important B*tches"
+        )
+        try:
+            user = self.bot.get_user(user_id)
+            if user is None:
+                user = await self.bot.fetch_user(user_id)
+            await user.send(dm_text)
+            log.info("Sent warn DM to user %s.", user_id)
+        except discord.Forbidden:
+            log.info("Could not DM warned user %s (DMs closed or bot is blocked).", user_id)
+        except (discord.NotFound, discord.HTTPException):
+            log.warning("Failed to send warn DM to user %s.", user_id, exc_info=True)
 
     @app_commands.command(name="register", description="Register for the event as a Domme or Sub.")
     @app_commands.describe(action="Choose whether you're signing up as a Domme or a Sub.")

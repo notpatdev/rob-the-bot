@@ -66,8 +66,12 @@ Supported IDs:
 - `DOMME_ROLE_ID`
 - `SUBMISSIVE_ROLE_ID`
 - `EVENT_BAN_ROLE_ID`
+- `WARN_LOG_CHANNEL_ID` *(optional)* — channel where Carl-bot posts warn cases
+- `CARLBOT_USER_ID` *(optional)* — Carl-bot's Discord user ID (so Rob ignores other bots)
 
 If `EVENT_REPORT_CHANNEL_ID` is `0` or missing, Rob falls back to `LEADERBOARD_CHANNEL_ID` for final event reports.
+
+If `WARN_LOG_CHANNEL_ID` and `CARLBOT_USER_ID` are both set, Rob watches that channel for Carl-bot warn case embeds and DMs the warned user a plain-text courtesy notification.
 
 ### 2. Event Themes and Windows
 
