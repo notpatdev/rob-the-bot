@@ -658,6 +658,8 @@ class ThroneWebhookServer:
                 continue
             if normalized.casefold() == "localhost":
                 return True
+            if normalized.casefold().startswith("::ffff:127."):
+                return True
             try:
                 if ipaddress.ip_address(normalized).is_loopback:
                     return True
@@ -667,7 +669,10 @@ class ThroneWebhookServer:
 
     async def _resolve_owner(self) -> discord.User | discord.Member | None:
         app_info = await self.bot.application_info()
-        return app_info.owner
+        owner = app_info.owner
+        if isinstance(owner, (discord.User, discord.Member)):
+            return owner
+        return None
 
     async def _broadcast_view_to_users(
         self,
