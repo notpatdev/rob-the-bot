@@ -738,6 +738,7 @@ class ThroneWebhookServer:
 
         target = str(payload.get("target") or "").strip().lower()
         dm_user_id: int | None = None
+        channel_id: int | None = None
         if target.startswith("user:"):
             raw_uid = target[len("user:"):]
             if not raw_uid.isdigit():
@@ -746,9 +747,20 @@ class ThroneWebhookServer:
                     status=400,
                 )
             dm_user_id = int(raw_uid)
+        elif target.startswith("channel:"):
+            raw_channel_id = target[len("channel:"):]
+            if not raw_channel_id.isdigit():
+                return web.json_response(
+                    {"ok": False, "error": "channel target must be 'channel:<discord_channel_id>' with a numeric ID"},
+                    status=400,
+                )
+            channel_id = int(raw_channel_id)
         elif target not in {"owner", "all", "dommes", "subs"}:
             return web.json_response(
-                {"ok": False, "error": "target must be one of: owner, all, dommes, subs, user:<discord_user_id>"},
+                {
+                    "ok": False,
+                    "error": "target must be one of: owner, all, dommes, subs, user:<discord_user_id>, channel:<discord_channel_id>",
+                },
                 status=400,
             )
 
@@ -817,6 +829,48 @@ class ThroneWebhookServer:
                 await _send(user)
             except discord.HTTPException:
                 log.exception("Failed to deliver direct broadcast to user %s.", dm_user_id)
+                return web.json_response(
+                    {"ok": False, "error": "discord delivery failed"}, status=502
+                )
+            return web.json_response(
+                {"ok": True, "target": target, "delivered_count": 1, "failed_user_ids": []}
+            )
+
+        if channel_id is not None:
+            channel = self.bot.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.bot.fetch_channel(channel_id)
+                except discord.NotFound:
+                    return web.json_response(
+                        {"ok": False, "error": f"channel {channel_id} not found"}, status=404
+                    )
+                except discord.Forbidden:
+                    return web.json_response(
+                        {"ok": False, "error": f"missing access to channel {channel_id}"}, status=403
+                    )
+                except discord.HTTPException:
+                    log.exception("Failed to fetch channel %s for direct broadcast.", channel_id)
+                    return web.json_response(
+                        {"ok": False, "error": "discord lookup failed"}, status=502
+                    )
+            if not hasattr(channel, "send"):
+                return web.json_response(
+                    {"ok": False, "error": f"channel {channel_id} does not support sending messages"},
+                    status=400,
+                )
+            try:
+                if plain:
+                    await channel.send(content=message)  # type: ignore[attr-defined]
+                else:
+                    await channel.send(view=_view_factory())  # type: ignore[attr-defined]
+            except discord.Forbidden:
+                return web.json_response(
+                    {"ok": False, "error": f"missing permission to send to channel {channel_id}"},
+                    status=403,
+                )
+            except discord.HTTPException:
+                log.exception("Failed to deliver direct broadcast to channel %s.", channel_id)
                 return web.json_response(
                     {"ok": False, "error": "discord delivery failed"}, status=502
                 )
