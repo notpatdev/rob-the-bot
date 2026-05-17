@@ -60,6 +60,106 @@ _USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
 _WARNED_USER_FIELD_HINTS = ("offender", "warned", "user", "member", "target")
 _MODERATOR_FIELD_HINTS = ("moderator", "mod", "staff", "issuer")
 _MAX_PROCESSED_WARN_MESSAGES = 500
+_RULE_HELP_TOPICS = "age, dm, respect, spam, catfish, ai, school, intro, oneintro, verify, scammer, coercion, dox"
+_RULE_HELP_MESSAGE = f"Use `!rule <topic>`.\nSupported topics: {_RULE_HELP_TOPICS}"
+_RULE_RESPONSES: dict[str, str] = {
+    "age": (
+        "## Rule 1: Not 18? You don't belong here.\n\n"
+        "Full server access requires members to verify they are over 18. "
+        "If you can't verify or are found to be under 18, you should not remain in this server."
+    ),
+    "dm": (
+        "## Rule 2: Respect DM requests\n\n"
+        "Respect DM request roles. You get one warning for this, then a ban."
+    ),
+    "respect": (
+        "## Rule 3: Respect all members\n\n"
+        "Respect everyone and keep drama out of the server."
+    ),
+    "spam": (
+        "## Rule 4: No spamming\n\n"
+        "Spamming anything results in an immediate ban."
+    ),
+    "catfish": (
+        "## Rule 5: NO CATFISHING 🎣\n\n"
+        "Dom/mes and/or subs found catfishing or lying to anyone will be exposed in the server "
+        "and subreddit and banned.\n"
+        "r/VIBsofFindom: https://www.reddit.com/r/VIBsofFindom/s/NCljul5MW9"
+    ),
+    "ai": (
+        "## Rule 6: NO AI\n\n"
+        "No AI content allowed."
+    ),
+    "school": (
+        "## Rule 7: You must be out of high school\n\n"
+        "You must be out of high school to be here."
+    ),
+    "intro": (
+        "## Rule 8: Intros are your own\n\n"
+        "Do not post on someone else's intro. One warning before ban."
+    ),
+    "oneintro": (
+        "## Rule 9: Only post your intro once\n\n"
+        "Only post your intro one time."
+    ),
+    "verify": (
+        "## Rule 10: Do not interact with unverified members\n\n"
+        "Any interaction with an unverified member is treated as talking to a minor. "
+        "One warning, then ban."
+    ),
+    "scammer": (
+        "## Rule 11: No scammers or time wasters\n\n"
+        "Subs proven to be scammers or time wasters will be banned."
+    ),
+    "coercion": (
+        "## Rule 12: No coercion\n\n"
+        "Dom/mes proven to have coerced anyone into anything they are not comfortable with "
+        "(breaking budget, public humiliation, sending outside of play, sharing personal details, etc.) "
+        "will be banned."
+    ),
+    "dox": (
+        "## Rule 13: NO DOXXING\n\n"
+        "Under no circumstances should any member send any personal information belonging to someone else, "
+        "even if that person consents."
+    ),
+}
+_RULE_ALIASES: dict[str, str] = {
+    "18": "age",
+    "adult": "age",
+    "dms": "dm",
+    "dmrequest": "dm",
+    "dmrequests": "dm",
+    "respect": "respect",
+    "drama": "respect",
+    "spamming": "spam",
+    "catfishing": "catfish",
+    "lying": "catfish",
+    "highschool": "school",
+    "intros": "intro",
+    "one-intro": "oneintro",
+    "singleintro": "oneintro",
+    "verification": "verify",
+    "unverified": "verify",
+    "scam": "scammer",
+    "scammers": "scammer",
+    "timewaster": "scammer",
+    "timewasters": "scammer",
+    "coerce": "coercion",
+    "forced": "coercion",
+    "force": "coercion",
+    "doxx": "dox",
+    "doxxing": "dox",
+}
+
+
+def _normalize_rule_topic(value: str) -> str:
+    return "".join(character for character in value.strip().lower() if character.isalnum())
+
+
+_RULE_TOPIC_LOOKUP: dict[str, str] = {
+    **{_normalize_rule_topic(topic): topic for topic in _RULE_RESPONSES},
+    **{_normalize_rule_topic(alias): topic for alias, topic in _RULE_ALIASES.items()},
+}
 
 
 class SendRequestDecisionView(discord.ui.View):
@@ -491,6 +591,19 @@ class RobEventCog(commands.Cog):
             ),
             mention_author=False,
         )
+
+    @commands.command(name="rule")
+    async def rule(self, ctx: commands.Context[commands.Bot], *, topic: str | None = None) -> None:
+        if topic is None:
+            await ctx.reply(_RULE_HELP_MESSAGE, mention_author=False)
+            return
+
+        canonical_topic = _RULE_TOPIC_LOOKUP.get(_normalize_rule_topic(topic))
+        if canonical_topic is None:
+            await ctx.reply(_RULE_HELP_MESSAGE, mention_author=False)
+            return
+
+        await ctx.reply(_RULE_RESPONSES[canonical_topic], mention_author=False)
 
     @commands.command(name="throne-blacklist")
     @commands.has_permissions(manage_guild=True)

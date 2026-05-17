@@ -35,6 +35,8 @@ Prefix commands:
   Explains that events are controlled from JSON now.
 - `!event end`
   Explains that events are controlled from JSON now.
+- `!rule <topic>`
+  Show a plain-text explanation for a specific server rule topic.
 
 Slash commands:
 
