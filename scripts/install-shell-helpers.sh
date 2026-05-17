@@ -741,29 +741,41 @@ print(urlunparse(('https', h, path, '', '', '')))
     broadcast)
       local target="${1:-}"
       local message="${2:-}"
-      local url="${3:-}"
       local _target_valid=0
       case "$target" in
         owner|all|dommes|subs) _target_valid=1 ;;
         user:*) [ -n "${target#user:}" ] && _target_valid=1 ;;
       esac
       if [ -z "$target" ] || [ "$_target_valid" -eq 0 ]; then
-        _throne_error "usage: throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url]"
+        _throne_error "usage: throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url] [--plain]"
         return 1
       fi
       if [ -z "$message" ]; then
-        _throne_error "usage: throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url]"
+        _throne_error "usage: throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url] [--plain]"
         return 1
       fi
+      # Parse remaining optional args: [url] [--plain] (order-independent after message)
+      local url="" plain=0
+      shift 2
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --plain) plain=1 ;;
+          http://*|https://*) url="$1" ;;
+          *) _throne_error "unknown broadcast option: $1"; return 1 ;;
+        esac
+        shift
+      done
       local admin_url="http://127.0.0.1:8080"
       # Use python3 to safely build JSON so quotes/newlines in $message can't break it.
       local payload
-      payload=$(TARGET="$target" MESSAGE="$message" URL="$url" python3 -c '
+      payload=$(TARGET="$target" MESSAGE="$message" URL="$url" PLAIN="$plain" python3 -c '
 import json, os
 data = {"target": os.environ.get("TARGET", ""), "message": os.environ.get("MESSAGE", "")}
 u = os.environ.get("URL", "")
 if u:
     data["url"] = u
+if os.environ.get("PLAIN") == "1":
+    data["plain"] = True
 print(json.dumps(data))
 ') || {
         _throne_error "Failed to build JSON payload."
@@ -809,7 +821,7 @@ print(json.dumps(data))
         "  throne webhook-rebuild <handle>" \
         "  throne blacklist <discord_user_id>" \
         "  throne maintenance <on|off>" \
-        "  throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url]"
+        "  throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url] [--plain]"
       [ -n "$cmd" ] && return 1 || return 0
       ;;
   esac

@@ -678,7 +678,8 @@ class ThroneWebhookServer:
         self,
         *,
         user_ids: set[int],
-        view_factory: Callable[[], BroadcastNotificationView],
+        view_factory: Callable[[], BroadcastNotificationView] | None = None,
+        plain_content: str | None = None,
     ) -> tuple[int, list[int]]:
         delivered = 0
         failed: list[int] = []
@@ -691,7 +692,10 @@ class ThroneWebhookServer:
                     failed.append(user_id)
                     continue
             try:
-                await user.send(view=view_factory())
+                if plain_content is not None:
+                    await user.send(content=plain_content)
+                else:
+                    await user.send(view=view_factory())  # type: ignore[misc]
             except discord.HTTPException:
                 failed.append(user_id)
                 continue
@@ -759,6 +763,11 @@ class ThroneWebhookServer:
             return web.json_response(
                 {"ok": False, "error": "url must be http(s)"}, status=400
             )
+        plain = bool(payload.get("plain", False))
+        if plain and action_url:
+            return web.json_response(
+                {"ok": False, "error": "url cannot be used with plain mode"}, status=400
+            )
 
         def _view_factory() -> BroadcastNotificationView:
             return BroadcastNotificationView(
@@ -767,6 +776,12 @@ class ThroneWebhookServer:
                 action_url=action_url or None,
             )
 
+        async def _send(user: discord.User | discord.Member) -> None:
+            if plain:
+                await user.send(content=message)
+            else:
+                await user.send(view=_view_factory())
+
         if target == "owner":
             owner = await self._resolve_owner()
             if owner is None:
@@ -774,7 +789,7 @@ class ThroneWebhookServer:
                     {"ok": False, "error": "no owner resolvable"}, status=500
                 )
             try:
-                await owner.send(view=_view_factory())
+                await _send(owner)
             except discord.HTTPException:
                 log.exception("Failed to deliver owner broadcast notification.")
                 return web.json_response(
@@ -799,7 +814,7 @@ class ThroneWebhookServer:
                         {"ok": False, "error": "discord lookup failed"}, status=502
                     )
             try:
-                await user.send(view=_view_factory())
+                await _send(user)
             except discord.HTTPException:
                 log.exception("Failed to deliver direct broadcast to user %s.", dm_user_id)
                 return web.json_response(
@@ -819,7 +834,8 @@ class ThroneWebhookServer:
 
         delivered_count, failed_user_ids = await self._broadcast_view_to_users(
             user_ids=user_ids,
-            view_factory=_view_factory,
+            view_factory=_view_factory if not plain else None,
+            plain_content=message if plain else None,
         )
 
         return web.json_response(
