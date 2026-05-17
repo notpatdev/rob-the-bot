@@ -745,13 +745,14 @@ print(urlunparse(('https', h, path, '', '', '')))
       case "$target" in
         owner|all|dommes|subs) _target_valid=1 ;;
         user:*) [ -n "${target#user:}" ] && _target_valid=1 ;;
+        channel:*) [ -n "${target#channel:}" ] && _target_valid=1 ;;
       esac
       if [ -z "$target" ] || [ "$_target_valid" -eq 0 ]; then
-        _throne_error "usage: throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url] [--plain]"
+        _throne_error "usage: throne broadcast <owner|all|dommes|subs|user:<discord_user_id>|channel:<discord_channel_id>> \"<message>\" [url] [--plain]"
         return 1
       fi
       if [ -z "$message" ]; then
-        _throne_error "usage: throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url] [--plain]"
+        _throne_error "usage: throne broadcast <owner|all|dommes|subs|user:<discord_user_id>|channel:<discord_channel_id>> \"<message>\" [url] [--plain]"
         return 1
       fi
       # Parse remaining optional args: [url] [--plain] (order-independent after message)
@@ -821,7 +822,7 @@ print(json.dumps(data))
         "  throne webhook-rebuild <handle>" \
         "  throne blacklist <discord_user_id>" \
         "  throne maintenance <on|off>" \
-        "  throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url] [--plain]"
+        "  throne broadcast <owner|all|dommes|subs|user:<discord_user_id>|channel:<discord_channel_id>> \"<message>\" [url] [--plain]"
       [ -n "$cmd" ] && return 1 || return 0
       ;;
   esac
