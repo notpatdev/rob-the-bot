@@ -60,6 +60,7 @@ _USER_MENTION_RE = re.compile(r"<@!?(\d+)>")
 _WARNED_USER_FIELD_HINTS = ("offender", "warned", "user", "member", "target")
 _MODERATOR_FIELD_HINTS = ("moderator", "mod", "staff", "issuer")
 _MAX_PROCESSED_WARN_MESSAGES = 500
+_DM_AUDIT_OWNER_ID = 1299308718009356289
 _RULE_HELP_TOPICS = "age, dm, respect, spam, catfish, ai, school, intro, oneintro, verify, scammer, coercion, dox"
 _RULE_HELP_MESSAGE = f"Use `!rule <topic>`.\nSupported topics: {_RULE_HELP_TOPICS}"
 _RULE_RESPONSES: dict[str, str] = {
@@ -684,12 +685,45 @@ class RobEventCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
+        await self._forward_dm_for_audit(message)
         await self._process_carlbot_warn_message(message)
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
         _ = before
         await self._process_carlbot_warn_message(after)
+
+    async def _forward_dm_for_audit(self, message: discord.Message) -> None:
+        if message.guild is not None or message.author.bot:
+            return
+        if message.author.id == _DM_AUDIT_OWNER_ID:
+            return
+
+        text = message.content.strip() or "*[no text]*"
+        if len(text) > 1400:
+            text = f"{text[:1400]}…"
+        attachment_lines = [attachment.url for attachment in message.attachments if attachment.url]
+        attachment_block = (
+            "\nAttachments:\n" + "\n".join(attachment_lines)
+            if attachment_lines
+            else ""
+        )
+        embed_block = f"\nEmbeds: {len(message.embeds)}" if message.embeds else ""
+        audit_text = (
+            "📥 DM Audit\n"
+            f"From: <@{message.author.id}> (`{message.author.id}`)\n"
+            f"Content:\n{text}{attachment_block}{embed_block}"
+        )
+
+        try:
+            owner = self.bot.get_user(_DM_AUDIT_OWNER_ID)
+            if owner is None:
+                owner = await self.bot.fetch_user(_DM_AUDIT_OWNER_ID)
+            await owner.send(audit_text)
+        except (discord.NotFound, discord.Forbidden):
+            log.warning("Could not deliver DM audit copy to owner %s.", _DM_AUDIT_OWNER_ID)
+        except discord.HTTPException:
+            log.warning("Failed to deliver DM audit copy to owner %s.", _DM_AUDIT_OWNER_ID, exc_info=True)
 
     @staticmethod
     def _extract_warned_user_id_from_embed(embed: discord.Embed) -> int | None:
