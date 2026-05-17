@@ -11,24 +11,25 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
-import os
 import secrets
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import aiohttp
+import discord
 from aiohttp import web
 
 from bot.config import BotConfig
 from bot.database import Database, ThroneWishlistItem
+from bot.event_views import BroadcastNotificationView
 from bot.throne_scraper import WishlistItemRecord, fetch_public_wishlist_items, match_wishlist_item_price
 from bot.utils import normalize_sender_name
 
 if TYPE_CHECKING:
-    import discord
     from discord.ext import commands
 
 log = logging.getLogger(__name__)
@@ -372,6 +373,8 @@ class ThroneWebhookServer:
         app = web.Application()
         app.router.add_get("/health", self._handle_health)
         app.router.add_post("/throne/webhook/{creator_id}/{secret}", self._handle_webhook)
+        app.router.add_post("/admin/maintenance", self._handle_admin_maintenance)
+        app.router.add_post("/admin/broadcast", self._handle_admin_broadcast)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         self._site = web.TCPSite(
@@ -634,4 +637,164 @@ class ThroneWebhookServer:
         # 13. Return success.
         return web.json_response(
             {"ok": True, "inserted": True, "send_id": send_id, "send_public_id": send_public_id}
+        )
+
+    # ── Admin endpoints ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_local_request(request: web.Request) -> bool:
+        candidate_hosts: list[str] = []
+        if request.remote:
+            candidate_hosts.append(request.remote)
+        transport = request.transport
+        if transport is not None:
+            peer = transport.get_extra_info("peername")
+            if isinstance(peer, tuple) and peer:
+                candidate_hosts.append(str(peer[0]))
+
+        for host in candidate_hosts:
+            normalized = host.strip().strip("[]")
+            if not normalized:
+                continue
+            if normalized.casefold() == "localhost":
+                return True
+            if normalized.casefold().startswith("::ffff:127."):
+                return True
+            try:
+                if ipaddress.ip_address(normalized).is_loopback:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    async def _resolve_owner(self) -> discord.User | discord.Member | None:
+        app_info = await self.bot.application_info()
+        owner = app_info.owner
+        if isinstance(owner, (discord.User, discord.Member)):
+            return owner
+        return None
+
+    async def _broadcast_view_to_users(
+        self,
+        *,
+        user_ids: set[int],
+        view_factory: Callable[[], BroadcastNotificationView],
+    ) -> tuple[int, list[int]]:
+        delivered = 0
+        failed: list[int] = []
+        for user_id in sorted(user_ids):
+            user = self.bot.get_user(user_id)
+            if user is None:
+                try:
+                    user = await self.bot.fetch_user(user_id)
+                except (discord.NotFound, discord.HTTPException):
+                    failed.append(user_id)
+                    continue
+            try:
+                await user.send(view=view_factory())
+            except discord.HTTPException:
+                failed.append(user_id)
+                continue
+            delivered += 1
+        return delivered, failed
+
+    async def _handle_admin_maintenance(self, request: web.Request) -> web.Response:
+        if not self._is_local_request(request):
+            return web.json_response({"ok": False, "error": "forbidden"}, status=403)
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        if not isinstance(payload, dict) or "active" not in payload:
+            return web.json_response(
+                {"ok": False, "error": "missing 'active' boolean"}, status=400
+            )
+        active = bool(payload.get("active"))
+        self.bot.maintenance_mode = active
+        log.warning("Maintenance mode set to %s via admin endpoint.", active)
+
+        event_cog = self.bot.get_cog("RobEventCog")
+        if event_cog is not None:
+            try:
+                await event_cog.sync_leaderboard_channel()
+            except Exception:  # noqa: BLE001 - never let UI sync block the response
+                log.exception("Failed to sync leaderboard after maintenance toggle.")
+
+        return web.json_response({"ok": True, "maintenance_mode": active})
+
+    async def _handle_admin_broadcast(self, request: web.Request) -> web.Response:
+        if not self._is_local_request(request):
+            return web.json_response({"ok": False, "error": "forbidden"}, status=403)
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+        if not isinstance(payload, dict):
+            return web.json_response({"ok": False, "error": "invalid payload"}, status=400)
+
+        target = str(payload.get("target") or "").strip().lower()
+        if target not in {"owner", "all", "dommes", "subs"}:
+            return web.json_response(
+                {"ok": False, "error": "target must be one of: owner, all, dommes, subs"},
+                status=400,
+            )
+
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            return web.json_response(
+                {"ok": False, "error": "missing 'message'"}, status=400
+            )
+        raw_url = payload.get("url")
+        action_url = str(raw_url).strip() if raw_url else None
+        if action_url and not (action_url.startswith("http://") or action_url.startswith("https://")):
+            return web.json_response(
+                {"ok": False, "error": "url must be http(s)"}, status=400
+            )
+
+        def _view_factory() -> BroadcastNotificationView:
+            return BroadcastNotificationView(
+                title="📣 Rob | Broadcast",
+                message=message,
+                action_url=action_url or None,
+            )
+
+        if target == "owner":
+            owner = await self._resolve_owner()
+            if owner is None:
+                return web.json_response(
+                    {"ok": False, "error": "no owner resolvable"}, status=500
+                )
+            try:
+                await owner.send(view=_view_factory())
+            except discord.HTTPException:
+                log.exception("Failed to deliver owner broadcast notification.")
+                return web.json_response(
+                    {"ok": False, "error": "discord delivery failed"}, status=502
+                )
+            return web.json_response(
+                {"ok": True, "target": "owner", "delivered_count": 1, "failed_user_ids": []}
+            )
+
+        user_ids: set[int] = set()
+        if target in {"all", "dommes"}:
+            dommes = await self.database.get_all_event_dommes()
+            user_ids.update(row.user_id for row in dommes)
+        if target in {"all", "subs"}:
+            subs = await self.database.get_all_event_subs()
+            user_ids.update(row.user_id for row in subs)
+
+        delivered_count, failed_user_ids = await self._broadcast_view_to_users(
+            user_ids=user_ids,
+            view_factory=_view_factory,
+        )
+
+        return web.json_response(
+            {
+                "ok": True,
+                "target": target,
+                "candidate_count": len(user_ids),
+                "delivered_count": delivered_count,
+                "failed_count": len(failed_user_ids),
+                "failed_user_ids": failed_user_ids,
+            }
         )

@@ -708,6 +708,83 @@ print(urlunparse(('https', h, path, '', '', '')))
       _throne_warn "Run 'rob restart' after updating Throne to reload the bot."
       ;;
 
+    maintenance)
+      local mode="${1:-}"
+      if [ -z "$mode" ] || { [ "$mode" != "on" ] && [ "$mode" != "off" ]; }; then
+        _throne_error "usage: throne maintenance <on|off>"
+        return 1
+      fi
+      local admin_url="http://127.0.0.1:8080"
+      local active="true"
+      [ "$mode" = "off" ] && active="false"
+      local response
+      response=$(curl -sS -w '\n%{http_code}' \
+        -X POST "${admin_url}/admin/maintenance" \
+        -H "Content-Type: application/json" \
+        --data "{\"active\": ${active}}") || {
+          _throne_error "curl failed to reach ${admin_url}/admin/maintenance"
+          return 1
+        }
+      local status_code body
+      status_code="${response##*$'\n'}"
+      body="${response%$'\n'*}"
+      if [ "$status_code" = "200" ]; then
+        _throne_ok "Maintenance mode → ${mode}"
+        [ -n "$body" ] && echo "$body"
+      else
+        _throne_error "Server returned HTTP ${status_code}"
+        [ -n "$body" ] && echo "$body" >&2
+        return 1
+      fi
+      ;;
+
+    broadcast)
+      local target="${1:-}"
+      local message="${2:-}"
+      local url="${3:-}"
+      if [ -z "$target" ] || { [ "$target" != "owner" ] && [ "$target" != "all" ] && [ "$target" != "dommes" ] && [ "$target" != "subs" ]; }; then
+        _throne_error "usage: throne broadcast <owner|all|dommes|subs> \"<message>\" [url]"
+        return 1
+      fi
+      if [ -z "$message" ]; then
+        _throne_error "usage: throne broadcast <owner|all|dommes|subs> \"<message>\" [url]"
+        return 1
+      fi
+      local admin_url="http://127.0.0.1:8080"
+      # Use python3 to safely build JSON so quotes/newlines in $message can't break it.
+      local payload
+      payload=$(TARGET="$target" MESSAGE="$message" URL="$url" python3 -c '
+import json, os
+data = {"target": os.environ.get("TARGET", ""), "message": os.environ.get("MESSAGE", "")}
+u = os.environ.get("URL", "")
+if u:
+    data["url"] = u
+print(json.dumps(data))
+') || {
+        _throne_error "Failed to build JSON payload."
+        return 1
+      }
+      local response
+      response=$(curl -sS -w '\n%{http_code}' \
+        -X POST "${admin_url}/admin/broadcast" \
+        -H "Content-Type: application/json" \
+        --data "$payload") || {
+          _throne_error "curl failed to reach ${admin_url}/admin/broadcast"
+          return 1
+        }
+      local status_code body
+      status_code="${response##*$'\n'}"
+      body="${response%$'\n'*}"
+      if [ "$status_code" = "200" ]; then
+        _throne_ok "Broadcast delivered."
+        [ -n "$body" ] && echo "$body"
+      else
+        _throne_error "Server returned HTTP ${status_code}"
+        [ -n "$body" ] && echo "$body" >&2
+        return 1
+      fi
+      ;;
+
     *)
       printf '%s\n' \
         "${BOLD}throne — Rob the Bot shell helper${RESET}" \
@@ -725,7 +802,9 @@ print(urlunparse(('https', h, path, '', '', '')))
         "  throne status         <handle>" \
         "  throne url            <handle>" \
         "  throne webhook-rebuild <handle>" \
-        "  throne blacklist <discord_user_id>"
+        "  throne blacklist <discord_user_id>" \
+        "  throne maintenance <on|off>" \
+        "  throne broadcast <owner|all|dommes|subs> \"<message>\" [url]"
       [ -n "$cmd" ] && return 1 || return 0
       ;;
   esac

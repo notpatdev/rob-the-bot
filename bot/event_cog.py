@@ -25,6 +25,8 @@ from bot.event_views import (
     EventStatusView,
     FinalReportSummaryView,
     LeaderboardView,
+    MaintenanceView,
+    OfflineView,
     SubSignupModal,
     UpdateNotificationView,
     format_money,
@@ -668,6 +670,12 @@ class RobEventCog(commands.Cog):
         interaction: discord.Interaction,
         action: app_commands.Choice[str],
     ) -> None:
+        if getattr(self.bot, "maintenance_mode", False):
+            await interaction.response.send_message(
+                "🛠️ Rob is currently down for maintenance. Please try again later.",
+                ephemeral=True,
+            )
+            return
         signup_type = action.value
         reason = await self.get_signup_block_reason(interaction, signup_type=signup_type)
         if reason is not None:
@@ -694,6 +702,12 @@ class RobEventCog(commands.Cog):
         sub: str | None = None,
         note: str | None = None,
     ) -> None:
+        if getattr(self.bot, "maintenance_mode", False):
+            await interaction.response.send_message(
+                "🛠️ Rob is currently down for maintenance. Please try again later.",
+                ephemeral=True,
+            )
+            return
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message("Server only.", ephemeral=True)
             return
@@ -747,6 +761,12 @@ class RobEventCog(commands.Cog):
         method: app_commands.Choice[str],
         note: str | None = None,
     ) -> None:
+        if getattr(self.bot, "maintenance_mode", False):
+            await interaction.response.send_message(
+                "🛠️ Rob is currently down for maintenance. Please try again later.",
+                ephemeral=True,
+            )
+            return
         blocked = await self.database.is_user_blacklisted(discord_user_id=str(interaction.user.id))
         if blocked:
             await send_deny_response(interaction)
@@ -1028,6 +1048,19 @@ class RobEventCog(commands.Cog):
 
         if await self._leaderboard_messages_need_reorder(channel):
             await self._clear_leaderboard_messages(channel)
+
+        if getattr(self.bot, "maintenance_mode", False):
+            await self._upsert_channel_message(
+                message_key="event:domme_totals",
+                channel=channel,
+                view=MaintenanceView(),
+            )
+            await self._upsert_channel_message(
+                message_key="event:sub_leaderboard",
+                channel=channel,
+                view=OfflineView(),
+            )
+            return
 
         event_key = context.event_key
         sub_rows_db = await self.database.get_event_sub_totals(limit=20, offset=0, event_key=event_key)
