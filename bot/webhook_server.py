@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
-import os
 import secrets
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import aiohttp
 import discord
@@ -641,25 +641,61 @@ class ThroneWebhookServer:
 
     # ── Admin endpoints ─────────────────────────────────────────────────────
 
-    def _check_admin_auth(self, request: web.Request) -> bool:
-        """Validate the admin bearer token against ROB_ADMIN_TOKEN."""
-        expected = (os.getenv("ROB_ADMIN_TOKEN") or "").strip()
-        if not expected:
-            log.error("Admin endpoint hit but ROB_ADMIN_TOKEN is not configured; denying.")
-            return False
-        header = request.headers.get("Authorization", "")
-        provided = ""
-        if header.lower().startswith("bearer "):
-            provided = header[7:].strip()
-        else:
-            provided = request.headers.get("X-Admin-Token", "").strip()
-        if not provided:
-            return False
-        return hmac.compare_digest(provided, expected)
+    @staticmethod
+    def _is_local_request(request: web.Request) -> bool:
+        candidate_hosts: list[str] = []
+        if request.remote:
+            candidate_hosts.append(request.remote)
+        transport = request.transport
+        if transport is not None:
+            peer = transport.get_extra_info("peername")
+            if isinstance(peer, tuple) and peer:
+                candidate_hosts.append(str(peer[0]))
+
+        for host in candidate_hosts:
+            normalized = host.strip().strip("[]")
+            if not normalized:
+                continue
+            if normalized.casefold() == "localhost":
+                return True
+            try:
+                if ipaddress.ip_address(normalized).is_loopback:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    async def _resolve_owner(self) -> discord.User | discord.Member | None:
+        app_info = await self.bot.application_info()
+        return app_info.owner
+
+    async def _broadcast_view_to_users(
+        self,
+        *,
+        user_ids: set[int],
+        view_factory: Callable[[], BroadcastNotificationView],
+    ) -> tuple[int, list[int]]:
+        delivered = 0
+        failed: list[int] = []
+        for user_id in sorted(user_ids):
+            user = self.bot.get_user(user_id)
+            if user is None:
+                try:
+                    user = await self.bot.fetch_user(user_id)
+                except (discord.NotFound, discord.HTTPException):
+                    failed.append(user_id)
+                    continue
+            try:
+                await user.send(view=view_factory())
+            except discord.HTTPException:
+                failed.append(user_id)
+                continue
+            delivered += 1
+        return delivered, failed
 
     async def _handle_admin_maintenance(self, request: web.Request) -> web.Response:
-        if not self._check_admin_auth(request):
-            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        if not self._is_local_request(request):
+            return web.json_response({"ok": False, "error": "forbidden"}, status=403)
         try:
             payload = await request.json()
         except (json.JSONDecodeError, ValueError):
@@ -682,14 +718,21 @@ class ThroneWebhookServer:
         return web.json_response({"ok": True, "maintenance_mode": active})
 
     async def _handle_admin_broadcast(self, request: web.Request) -> web.Response:
-        if not self._check_admin_auth(request):
-            return web.json_response({"ok": False, "error": "unauthorized"}, status=401)
+        if not self._is_local_request(request):
+            return web.json_response({"ok": False, "error": "forbidden"}, status=403)
         try:
             payload = await request.json()
         except (json.JSONDecodeError, ValueError):
             return web.json_response({"ok": False, "error": "invalid json"}, status=400)
         if not isinstance(payload, dict):
             return web.json_response({"ok": False, "error": "invalid payload"}, status=400)
+
+        target = str(payload.get("target") or "").strip().lower()
+        if target not in {"owner", "all", "dommes", "subs"}:
+            return web.json_response(
+                {"ok": False, "error": "target must be one of: owner, all, dommes, subs"},
+                status=400,
+            )
 
         message = str(payload.get("message") or "").strip()
         if not message:
@@ -703,50 +746,50 @@ class ThroneWebhookServer:
                 {"ok": False, "error": "url must be http(s)"}, status=400
             )
 
-        view = BroadcastNotificationView(
-            title="📣 Rob | Broadcast",
-            message=message,
-            action_url=action_url or None,
-        )
-
-        # Prefer an explicit broadcast channel id if configured, else DM the bot owner.
-        target_channel_id_raw = (os.getenv("ROB_BROADCAST_CHANNEL_ID") or "").strip()
-        target_channel_id: int | None = None
-        if target_channel_id_raw:
-            try:
-                target_channel_id = int(target_channel_id_raw)
-            except ValueError:
-                log.warning(
-                    "ROB_BROADCAST_CHANNEL_ID=%r is not an integer; ignoring.",
-                    target_channel_id_raw,
-                )
-
-        delivered_to: str | None = None
-        try:
-            if target_channel_id is not None:
-                channel = self.bot.get_channel(target_channel_id)
-                if channel is None:
-                    channel = await self.bot.fetch_channel(target_channel_id)
-                if not hasattr(channel, "send"):
-                    return web.json_response(
-                        {"ok": False, "error": "broadcast channel is not sendable"},
-                        status=500,
-                    )
-                await channel.send(view=view)
-                delivered_to = f"channel:{target_channel_id}"
-            else:
-                app_info = await self.bot.application_info()
-                owner = app_info.owner
-                if owner is None:
-                    return web.json_response(
-                        {"ok": False, "error": "no owner resolvable"}, status=500
-                    )
-                await owner.send(view=view)
-                delivered_to = f"owner:{owner.id}"
-        except discord.HTTPException:
-            log.exception("Failed to deliver broadcast notification.")
-            return web.json_response(
-                {"ok": False, "error": "discord delivery failed"}, status=502
+        def _view_factory() -> BroadcastNotificationView:
+            return BroadcastNotificationView(
+                title="📣 Rob | Broadcast",
+                message=message,
+                action_url=action_url or None,
             )
 
-        return web.json_response({"ok": True, "delivered_to": delivered_to})
+        if target == "owner":
+            owner = await self._resolve_owner()
+            if owner is None:
+                return web.json_response(
+                    {"ok": False, "error": "no owner resolvable"}, status=500
+                )
+            try:
+                await owner.send(view=_view_factory())
+            except discord.HTTPException:
+                log.exception("Failed to deliver owner broadcast notification.")
+                return web.json_response(
+                    {"ok": False, "error": "discord delivery failed"}, status=502
+                )
+            return web.json_response(
+                {"ok": True, "target": "owner", "delivered_count": 1, "failed_user_ids": []}
+            )
+
+        user_ids: set[int] = set()
+        if target in {"all", "dommes"}:
+            dommes = await self.database.get_all_event_dommes()
+            user_ids.update(row.user_id for row in dommes)
+        if target in {"all", "subs"}:
+            subs = await self.database.get_all_event_subs()
+            user_ids.update(row.user_id for row in subs)
+
+        delivered_count, failed_user_ids = await self._broadcast_view_to_users(
+            user_ids=user_ids,
+            view_factory=_view_factory,
+        )
+
+        return web.json_response(
+            {
+                "ok": True,
+                "target": target,
+                "candidate_count": len(user_ids),
+                "delivered_count": delivered_count,
+                "failed_count": len(failed_user_ids),
+                "failed_user_ids": failed_user_ids,
+            }
+        )

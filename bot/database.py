@@ -510,6 +510,17 @@ class Database:
             rows = await cursor.fetchall()
         return [EventDommeRegistration.from_row(row) for row in rows]
 
+    async def get_all_event_subs(self) -> list[EventSubRegistration]:
+        async with self.connection.execute(
+            """
+            SELECT user_id, sub_name, registered_at
+            FROM event_subs
+            ORDER BY registered_at ASC
+            """
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [EventSubRegistration.from_row(row) for row in rows]
+
     async def save_event_sub(
         self,
         *,
