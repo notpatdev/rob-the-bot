@@ -733,9 +733,18 @@ class ThroneWebhookServer:
             return web.json_response({"ok": False, "error": "invalid payload"}, status=400)
 
         target = str(payload.get("target") or "").strip().lower()
-        if target not in {"owner", "all", "dommes", "subs"}:
+        dm_user_id: int | None = None
+        if target.startswith("user:"):
+            raw_uid = target[len("user:"):]
+            if not raw_uid.isdigit():
+                return web.json_response(
+                    {"ok": False, "error": "user target must be 'user:<discord_user_id>' with a numeric ID"},
+                    status=400,
+                )
+            dm_user_id = int(raw_uid)
+        elif target not in {"owner", "all", "dommes", "subs"}:
             return web.json_response(
-                {"ok": False, "error": "target must be one of: owner, all, dommes, subs"},
+                {"ok": False, "error": "target must be one of: owner, all, dommes, subs, user:<discord_user_id>"},
                 status=400,
             )
 
@@ -773,6 +782,31 @@ class ThroneWebhookServer:
                 )
             return web.json_response(
                 {"ok": True, "target": "owner", "delivered_count": 1, "failed_user_ids": []}
+            )
+
+        if dm_user_id is not None:
+            user = self.bot.get_user(dm_user_id)
+            if user is None:
+                try:
+                    user = await self.bot.fetch_user(dm_user_id)
+                except discord.NotFound:
+                    return web.json_response(
+                        {"ok": False, "error": f"user {dm_user_id} not found"}, status=404
+                    )
+                except discord.HTTPException:
+                    log.exception("Failed to fetch user %s for direct broadcast.", dm_user_id)
+                    return web.json_response(
+                        {"ok": False, "error": "discord lookup failed"}, status=502
+                    )
+            try:
+                await user.send(view=_view_factory())
+            except discord.HTTPException:
+                log.exception("Failed to deliver direct broadcast to user %s.", dm_user_id)
+                return web.json_response(
+                    {"ok": False, "error": "discord delivery failed"}, status=502
+                )
+            return web.json_response(
+                {"ok": True, "target": target, "delivered_count": 1, "failed_user_ids": []}
             )
 
         user_ids: set[int] = set()

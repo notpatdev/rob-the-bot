@@ -742,12 +742,17 @@ print(urlunparse(('https', h, path, '', '', '')))
       local target="${1:-}"
       local message="${2:-}"
       local url="${3:-}"
-      if [ -z "$target" ] || { [ "$target" != "owner" ] && [ "$target" != "all" ] && [ "$target" != "dommes" ] && [ "$target" != "subs" ]; }; then
-        _throne_error "usage: throne broadcast <owner|all|dommes|subs> \"<message>\" [url]"
+      local _target_valid=0
+      case "$target" in
+        owner|all|dommes|subs) _target_valid=1 ;;
+        user:*) [ -n "${target#user:}" ] && _target_valid=1 ;;
+      esac
+      if [ -z "$target" ] || [ "$_target_valid" -eq 0 ]; then
+        _throne_error "usage: throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url]"
         return 1
       fi
       if [ -z "$message" ]; then
-        _throne_error "usage: throne broadcast <owner|all|dommes|subs> \"<message>\" [url]"
+        _throne_error "usage: throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url]"
         return 1
       fi
       local admin_url="http://127.0.0.1:8080"
@@ -804,7 +809,7 @@ print(json.dumps(data))
         "  throne webhook-rebuild <handle>" \
         "  throne blacklist <discord_user_id>" \
         "  throne maintenance <on|off>" \
-        "  throne broadcast <owner|all|dommes|subs> \"<message>\" [url]"
+        "  throne broadcast <owner|all|dommes|subs|user:<discord_user_id>> \"<message>\" [url]"
       [ -n "$cmd" ] && return 1 || return 0
       ;;
   esac
