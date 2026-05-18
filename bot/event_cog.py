@@ -17,7 +17,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot.config import BotConfig
-from bot.database import Database, EventState, SendSummary, ThroneWishlistItem
+from bot.database import Database, EventSend, EventState, SendSummary, ThroneWishlistItem
 from bot.deny import send_deny_response
 from bot.event_config import ConfiguredEvent, EventTheme, EventsConfig, load_events_config
 from bot.event_views import (
@@ -61,6 +61,22 @@ _WARNED_USER_FIELD_HINTS = ("offender", "warned", "user", "member", "target")
 _MODERATOR_FIELD_HINTS = ("moderator", "mod", "staff", "issuer")
 _MAX_PROCESSED_WARN_MESSAGES = 500
 _DM_AUDIT_OWNER_ID = 1299308718009356289
+_COUNTING_CHANNEL_ID = 1496054741904658585
+_COUNT_FAIL_REACTION_FALLBACK = "⭐"
+_COUNT_SUCCESS_REACTION = "✅"
+_COUNT_FAIL_REACTION_NAME = "YouTriedStar"
+_COUNT_OWNER_RESTORE_HANDLE = "angel2adore"
+_COUNT_RESTORE_WINDOW = timedelta(minutes=5)
+_COUNT_KEY_CURRENT = "count.current"
+_COUNT_KEY_ACTIVE = "count.active"
+_COUNT_KEY_PENDING_RESTORE = "count.pending_restore"
+_COUNT_KEY_RESTORE_MODE = "count.restore_mode"
+_COUNT_KEY_RESTORE_UNTIL = "count.restore_until"
+_COUNT_KEY_RESTORE_VALUE = "count.restore_value"
+_COUNT_KEY_FAILED_USER_ID = "count.failed_user_id"
+_COUNT_RESTORE_MODE_OWNER = "owner"
+_COUNT_RESTORE_MODE_SUBMISSIVE = "submissive"
+_COUNT_UNSET = object()
 _RULE_HELP_TOPICS = "age, dm, respect, spam, catfish, ai, school, intro, oneintro, verify, scammer, coercion, dox"
 _RULE_HELP_MESSAGE = f"Use `!rule <topic>`.\nSupported topics: {_RULE_HELP_TOPICS}"
 _RULE_RESPONSES: dict[str, str] = {
@@ -265,7 +281,20 @@ class EventRuntimeContext:
         return f"{self.theme.emoji} {self.theme.leaderboard_title}"
 
 
+@dataclass(frozen=True)
+class CountingState:
+    current_number: int
+    is_active: bool
+    pending_restore: bool
+    restore_mode: str | None
+    restore_until: datetime | None
+    restore_value: int | None
+    failed_user_id: int | None
+
+
 class RobEventCog(commands.Cog):
+    count_group = app_commands.Group(name="count", description="Counting channel tools.")
+
     def __init__(
         self,
         bot: commands.Bot,
@@ -486,6 +515,245 @@ class RobEventCog(commands.Cog):
     def _member_has_role(member: discord.Member, role_id: int) -> bool:
         return role_id > 0 and any(role.id == role_id for role in member.roles)
 
+    @staticmethod
+    def _parse_count_bool(raw: str | None, *, default: bool = False) -> bool:
+        if raw is None:
+            return default
+        lowered = raw.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    @staticmethod
+    def _parse_count_int(raw: str | None, *, default: int = 0) -> int:
+        if raw is None:
+            return default
+        try:
+            return int(raw.strip())
+        except (TypeError, ValueError, AttributeError):
+            return default
+
+    @staticmethod
+    def _parse_count_datetime(raw: str | None) -> datetime | None:
+        if raw is None:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    async def _load_counting_state(self) -> CountingState:
+        values = await self.database.get_bot_config_values(
+            keys=[
+                _COUNT_KEY_CURRENT,
+                _COUNT_KEY_ACTIVE,
+                _COUNT_KEY_PENDING_RESTORE,
+                _COUNT_KEY_RESTORE_MODE,
+                _COUNT_KEY_RESTORE_UNTIL,
+                _COUNT_KEY_RESTORE_VALUE,
+                _COUNT_KEY_FAILED_USER_ID,
+            ]
+        )
+        return CountingState(
+            current_number=max(0, self._parse_count_int(values.get(_COUNT_KEY_CURRENT), default=0)),
+            is_active=self._parse_count_bool(values.get(_COUNT_KEY_ACTIVE), default=False),
+            pending_restore=self._parse_count_bool(values.get(_COUNT_KEY_PENDING_RESTORE), default=False),
+            restore_mode=(values.get(_COUNT_KEY_RESTORE_MODE) or "").strip() or None,
+            restore_until=self._parse_count_datetime(values.get(_COUNT_KEY_RESTORE_UNTIL)),
+            restore_value=(
+                self._parse_count_int(values.get(_COUNT_KEY_RESTORE_VALUE), default=0)
+                if values.get(_COUNT_KEY_RESTORE_VALUE) is not None
+                else None
+            ),
+            failed_user_id=self._parse_count_int(values.get(_COUNT_KEY_FAILED_USER_ID), default=0) or None,
+        )
+
+    async def _save_counting_state(
+        self,
+        *,
+        current_number: int | None = None,
+        is_active: bool | None = None,
+        pending_restore: bool | None = None,
+        restore_mode: str | None | object = _COUNT_UNSET,
+        restore_until: datetime | None | object = _COUNT_UNSET,
+        restore_value: int | None | object = _COUNT_UNSET,
+        failed_user_id: int | None | object = _COUNT_UNSET,
+    ) -> None:
+        values: dict[str, str | int | None] = {}
+        if current_number is not None:
+            values[_COUNT_KEY_CURRENT] = max(0, int(current_number))
+        if is_active is not None:
+            values[_COUNT_KEY_ACTIVE] = 1 if is_active else 0
+        if pending_restore is not None:
+            values[_COUNT_KEY_PENDING_RESTORE] = 1 if pending_restore else 0
+        if restore_mode is not _COUNT_UNSET:
+            values[_COUNT_KEY_RESTORE_MODE] = restore_mode if isinstance(restore_mode, str) else None
+        if restore_until is not _COUNT_UNSET:
+            values[_COUNT_KEY_RESTORE_UNTIL] = (
+                restore_until.isoformat() if isinstance(restore_until, datetime) else None
+            )
+        if restore_value is not _COUNT_UNSET:
+            values[_COUNT_KEY_RESTORE_VALUE] = (
+                max(0, int(restore_value))
+                if isinstance(restore_value, int)
+                else None
+            )
+        if failed_user_id is not _COUNT_UNSET:
+            values[_COUNT_KEY_FAILED_USER_ID] = int(failed_user_id) if isinstance(failed_user_id, int) else None
+        await self.database.set_bot_config_values(values=values)
+
+    async def _expire_count_restore_if_needed(self, state: CountingState) -> CountingState:
+        if not state.pending_restore or state.restore_until is None:
+            return state
+        if datetime.now(timezone.utc) <= state.restore_until:
+            return state
+        await self._save_counting_state(
+            current_number=0,
+            is_active=True,
+            pending_restore=False,
+            restore_mode=None,
+            restore_until=None,
+            restore_value=None,
+            failed_user_id=None,
+        )
+        return await self._load_counting_state()
+
+    async def _add_count_failure_reaction(self, message: discord.Message) -> None:
+        emoji: str | discord.Emoji = _COUNT_FAIL_REACTION_FALLBACK
+        if message.guild is not None:
+            custom = discord.utils.get(message.guild.emojis, name=_COUNT_FAIL_REACTION_NAME)
+            if custom is not None:
+                emoji = custom
+        try:
+            await message.add_reaction(emoji)
+        except discord.HTTPException:
+            return
+
+    async def _handle_count_failure(self, message: discord.Message, *, state: CountingState) -> None:
+        await self._add_count_failure_reaction(message)
+        member = message.author if isinstance(message.author, discord.Member) else None
+        if member is None:
+            return
+
+        if member.id == _DM_AUDIT_OWNER_ID:
+            restore_until = datetime.now(timezone.utc) + _COUNT_RESTORE_WINDOW
+            await self._save_counting_state(
+                is_active=False,
+                pending_restore=True,
+                restore_mode=_COUNT_RESTORE_MODE_OWNER,
+                restore_until=restore_until,
+                restore_value=state.current_number,
+                failed_user_id=member.id,
+            )
+            await message.channel.send(
+                "Count broke. Send to **angel2adore** on Throne and get it tracked within 5 minutes to restore the streak."
+            )
+            return
+
+        if self._member_has_role(member, self.config.submissive_role_id):
+            restore_until = datetime.now(timezone.utc) + _COUNT_RESTORE_WINDOW
+            await self._save_counting_state(
+                is_active=False,
+                pending_restore=True,
+                restore_mode=_COUNT_RESTORE_MODE_SUBMISSIVE,
+                restore_until=restore_until,
+                restore_value=state.current_number,
+                failed_user_id=member.id,
+            )
+            await message.channel.send(
+                "Count broke. Send to any domme on Throne and make sure Rob tracks it within 5 minutes to restore the streak."
+            )
+            return
+
+        await self._save_counting_state(
+            current_number=0,
+            is_active=True,
+            pending_restore=False,
+            restore_mode=None,
+            restore_until=None,
+            restore_value=None,
+            failed_user_id=None,
+        )
+        await message.channel.send("Count failed. Restart at **1**.")
+
+    async def _handle_counting_message(self, message: discord.Message) -> None:
+        if message.guild is None or message.author.bot:
+            return
+        if message.channel.id != _COUNTING_CHANNEL_ID:
+            return
+
+        state = await self._expire_count_restore_if_needed(await self._load_counting_state())
+        if not state.is_active:
+            return
+
+        content = message.content.strip()
+        if not content.isdigit():
+            await self._handle_count_failure(message, state=state)
+            return
+
+        entered = int(content)
+        expected = state.current_number + 1
+        if entered != expected:
+            await self._handle_count_failure(message, state=state)
+            return
+
+        await self._save_counting_state(current_number=entered)
+        try:
+            await message.add_reaction(_COUNT_SUCCESS_REACTION)
+        except discord.HTTPException:
+            return
+
+    async def process_count_restore_from_send(self, *, domme_user_id: int, send: EventSend) -> None:
+        state = await self._expire_count_restore_if_needed(await self._load_counting_state())
+        if not state.pending_restore:
+            return
+        restore_value = state.restore_value if state.restore_value is not None else state.current_number
+        mode = (state.restore_mode or "").strip().lower()
+
+        if mode == _COUNT_RESTORE_MODE_OWNER:
+            creator = await self.database.get_throne_creator_by_discord_user(
+                guild_id=str(self.config.guild_id or 0),
+                discord_user_id=str(domme_user_id),
+            )
+            if creator is None or creator.throne_handle.casefold() != _COUNT_OWNER_RESTORE_HANDLE:
+                return
+        elif mode == _COUNT_RESTORE_MODE_SUBMISSIVE:
+            if state.failed_user_id is None or send.claimed_sub_user_id != state.failed_user_id:
+                return
+            guild = self.bot.get_guild(self.config.guild_id)
+            if guild is None:
+                return
+            domme_member = guild.get_member(domme_user_id)
+            if domme_member is None or not self._member_has_role(domme_member, self.config.domme_role_id):
+                return
+        else:
+            return
+
+        await self._save_counting_state(
+            current_number=restore_value,
+            is_active=True,
+            pending_restore=False,
+            restore_mode=None,
+            restore_until=None,
+            restore_value=None,
+            failed_user_id=None,
+        )
+        channel = self.bot.get_channel(_COUNTING_CHANNEL_ID)
+        if channel is None and self.config.guild_id:
+            guild = self.bot.get_guild(self.config.guild_id)
+            if guild is not None:
+                try:
+                    channel = await guild.fetch_channel(_COUNTING_CHANNEL_ID)
+                except (discord.NotFound, discord.HTTPException):
+                    channel = None
+        if isinstance(channel, discord.TextChannel):
+            await channel.send(f"Count restored. Continue at **{restore_value + 1}**.")
+
     async def _is_registered_domme(self, *, member: discord.Member) -> bool:
         if self._member_has_role(member, self.config.domme_role_id):
             return True
@@ -593,6 +861,40 @@ class RobEventCog(commands.Cog):
             mention_author=False,
         )
 
+    @count_group.command(name="fix", description="Set the counting baseline number.")
+    @app_commands.describe(startingnumber="Set the baseline. Next valid message is this number + 1.")
+    async def count_fix(self, interaction: discord.Interaction, startingnumber: int) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("Server only.", ephemeral=True)
+            return
+        if not has_admin_command_permissions(interaction.user, self.config):
+            await interaction.response.send_message("Nope. Not for you.", ephemeral=True)
+            return
+        if startingnumber < 0:
+            await interaction.response.send_message("Starting number must be 0 or higher.", ephemeral=True)
+            return
+
+        await self._save_counting_state(
+            current_number=startingnumber,
+            is_active=True,
+            pending_restore=False,
+            restore_mode=None,
+            restore_until=None,
+            restore_value=None,
+            failed_user_id=None,
+        )
+        await interaction.response.send_message(
+            f"Count fixed. Next valid number is **{startingnumber + 1}**.",
+            ephemeral=True,
+        )
+
+    @count_group.command(name="status", description="Show how to check the current count.")
+    async def count_status(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(
+            "To see what number the count is up to, open the counting channel lol",
+            ephemeral=True,
+        )
+
     @commands.command(name="rule")
     async def rule(self, ctx: commands.Context[commands.Bot], *, topic: str | None = None) -> None:
         if topic is None:
@@ -687,6 +989,7 @@ class RobEventCog(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         await self._forward_dm_for_audit(message)
         await self._process_carlbot_warn_message(message)
+        await self._handle_counting_message(message)
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:

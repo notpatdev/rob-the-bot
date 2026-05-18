@@ -225,6 +225,40 @@ rob() {
         done
       ;;
 
+    count)
+      local action="${2:-}" start_from="${3:-0}"
+      case "$action" in
+        start)
+          if ! [[ "$start_from" =~ ^[0-9]+$ ]]; then
+            echo "${RED}usage: rob count start [number>=0]${RESET}" >&2
+            return 1
+          fi
+          sudo sqlite3 "$DB" \
+            "INSERT INTO bot_config (key, value) VALUES ('count.current', '${start_from}')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+             INSERT INTO bot_config (key, value) VALUES ('count.active', '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+             INSERT INTO bot_config (key, value) VALUES ('count.pending_restore', '0')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+             DELETE FROM bot_config WHERE key IN ('count.restore_mode', 'count.restore_until', 'count.restore_value', 'count.failed_user_id');"
+          echo "${GREEN}Counting started from ${start_from}. Next number is $((start_from + 1)).${RESET}"
+          ;;
+        end)
+          sudo sqlite3 "$DB" \
+            "INSERT INTO bot_config (key, value) VALUES ('count.active', '0')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+             INSERT INTO bot_config (key, value) VALUES ('count.pending_restore', '0')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+             DELETE FROM bot_config WHERE key IN ('count.restore_mode', 'count.restore_until', 'count.restore_value', 'count.failed_user_id');"
+          echo "${YELLOW}Counting ended.${RESET}"
+          ;;
+        *)
+          echo "${RED}usage: rob count <start [number>=0]|end>${RESET}" >&2
+          return 1
+          ;;
+      esac
+      ;;
+
     restart|refresh)
       sudo systemctl restart rob-the-bot
       echo "${GREEN}Rob restarted.${RESET}"
@@ -236,6 +270,7 @@ rob() {
         "  rob blacklist <discord_user_id> [reason]" \
         "  rob unblacklist <discord_user_id>" \
         "  rob blacklisted" \
+        "  rob count <start [number>=0]|end>" \
         "  rob restart"
       return 1
       ;;

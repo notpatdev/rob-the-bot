@@ -1075,6 +1075,7 @@ class ThroneTrackerCog(commands.Cog):
             event_cog = self.bot.get_cog("RobEventCog")
             if event_cog is not None:
                 await event_cog.sync_leaderboard_channel()
+                await event_cog.process_count_restore_from_send(domme_user_id=domme_user_id, send=send)
         except Exception:
             log.exception("Failed to sync leaderboard after send id %s.", send_id)
 
