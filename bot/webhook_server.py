@@ -374,6 +374,7 @@ class ThroneWebhookServer:
         app.router.add_get("/health", self._handle_health)
         app.router.add_post("/throne/webhook/{creator_id}/{secret}", self._handle_webhook)
         app.router.add_post("/admin/maintenance", self._handle_admin_maintenance)
+        app.router.add_post("/admin/leaderboard/sync", self._handle_admin_leaderboard_sync)
         app.router.add_post("/admin/broadcast", self._handle_admin_broadcast)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
@@ -725,6 +726,22 @@ class ThroneWebhookServer:
                 log.exception("Failed to sync leaderboard after maintenance toggle.")
 
         return web.json_response({"ok": True, "maintenance_mode": active})
+
+    async def _handle_admin_leaderboard_sync(self, request: web.Request) -> web.Response:
+        if not self._is_local_request(request):
+            return web.json_response({"ok": False, "error": "forbidden"}, status=403)
+
+        event_cog = self.bot.get_cog("RobEventCog")
+        if event_cog is None:
+            return web.json_response({"ok": False, "error": "event cog unavailable"}, status=503)
+
+        try:
+            await event_cog.sync_leaderboard_channel()
+        except Exception:  # noqa: BLE001 - keep endpoint resilient and log details
+            log.exception("Failed to sync leaderboard via admin endpoint.")
+            return web.json_response({"ok": False, "error": "sync failed"}, status=500)
+
+        return web.json_response({"ok": True, "synced": True})
 
     async def _handle_admin_broadcast(self, request: web.Request) -> web.Response:
         if not self._is_local_request(request):
