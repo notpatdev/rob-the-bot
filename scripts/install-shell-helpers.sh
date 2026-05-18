@@ -168,9 +168,25 @@ _rob_valid_posint() {
 _rob_sql_escape() {
   printf '%s' "${1}" | sed "s/'/''/g"
 }
+_rob_db_path() {
+  local default_db="/opt/rob-the-bot/data/rob_the_bot.sqlite3"
+  local env_file="/opt/rob-the-bot/app/.env"
+  local env_db=""
+  if [ -r "${env_file}" ]; then
+    env_db="$(grep -E '^[[:space:]]*(export[[:space:]]+)?DATABASE_PATH[[:space:]]*=' "${env_file}" \
+      | tail -n1 \
+      | sed -E "s/^[[:space:]]*(export[[:space:]]+)?DATABASE_PATH[[:space:]]*=[[:space:]]*//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//")"
+  fi
+  if [ -n "${env_db}" ]; then
+    printf '%s' "${env_db}"
+    return
+  fi
+  printf '%s' "${default_db}"
+}
 
 rob() {
-  local DB="/opt/rob-the-bot/data/rob_the_bot.sqlite3"
+  local DB
+  DB="$(_rob_db_path)"
   local RED GREEN YELLOW CYAN BOLD RESET
   RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
   CYAN=$'\033[0;36m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
@@ -278,7 +294,8 @@ rob() {
 }
 
 throne() {
-  local DB="/opt/rob-the-bot/data/rob_the_bot.sqlite3"
+  local DB
+  DB="$(_rob_db_path)"
   local BASE_URL="https://rob.barecoding.com"
   local RED GREEN YELLOW CYAN BOLD RESET
   RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
