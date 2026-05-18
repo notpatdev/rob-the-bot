@@ -306,6 +306,28 @@ throne() {
   _throne_warn()   { echo "${YELLOW}! $*${RESET}"; }
   _throne_kv()     { printf "  ${BOLD}%-22s${RESET} %s\n" "$1" "$2"; }
   _throne_header() { echo; echo "${CYAN}${BOLD}═══ $* ═══${RESET}"; echo; }
+  _throne_sync_leaderboard() {
+    local admin_url="http://127.0.0.1:8080/admin/leaderboard/sync"
+    local response status_code body
+    response=$(curl -sS -w '\n%{http_code}' \
+      -X POST "${admin_url}" \
+      -H "Content-Type: application/json" \
+      --data '{}' ) || {
+        _throne_warn "Could not reach ${admin_url}."
+        _throne_warn "Run 'rob restart' to re-render leaderboard."
+        return 1
+      }
+    status_code="${response##*$'\n'}"
+    body="${response%$'\n'*}"
+    if [ "$status_code" = "200" ]; then
+      _throne_ok "Leaderboard sync requested."
+      return 0
+    fi
+    _throne_warn "Leaderboard sync endpoint returned HTTP ${status_code}."
+    [ -n "$body" ] && echo "$body" >&2
+    _throne_warn "Run 'rob restart' to re-render leaderboard."
+    return 1
+  }
 
   local cmd="${1:-}"
   shift || true
@@ -386,10 +408,17 @@ throne() {
       if ! [[ "${amount_usd}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         _throne_error "Failed to compute amount_usd from ${amount_cents} cents."; return 1
       fi
-      sudo sqlite3 "$DB" \
-        "UPDATE event_sends SET amount_usd = ${amount_usd} WHERE id = ${send_id};"
+      local rows_changed
+      rows_changed=$(sudo sqlite3 "$DB" \
+        "UPDATE event_sends SET amount_usd = ${amount_usd} WHERE id = ${send_id};
+         SELECT changes();")
+      rows_changed="${rows_changed//$'\n'/}"
+      if [ "${rows_changed:-0}" -eq 0 ]; then
+        _throne_error "No send found with id ${send_id}; nothing was updated."
+        return 1
+      fi
       _throne_ok "Send #${send_id} → \$${amount_usd} USD (${amount_cents} cents)."
-      _throne_warn "Run 'rob restart' to re-render leaderboard."
+      _throne_sync_leaderboard || true
       ;;
 
     refresh)
@@ -606,7 +635,7 @@ sys.exit(0 if int(a) >= 1000 else 1)
       _throne_kv "Claimed sub UID:" "${claimed_sub_display}"
       _throne_kv "Event key:"    "${event_key:-(none)}"
       echo
-      _throne_warn "Run 'rob restart' so the bot re-renders the leaderboard."
+      _throne_sync_leaderboard || true
       _throne_warn "Shell addsend writes directly to DB; it does not post a send-tracker card."
       ;;
 
