@@ -1116,6 +1116,30 @@ class Database:
                 pass
         return result
 
+    async def get_bot_config_values(self, *, keys: list[str]) -> dict[str, str]:
+        if not keys:
+            return {}
+        async with self.connection.execute(
+            "SELECT key, value FROM bot_config WHERE key IN ({})".format(",".join("?" * len(keys))),
+            tuple(keys),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return {str(row["key"]): str(row["value"]) for row in rows}
+
+    async def set_bot_config_values(self, *, values: dict[str, str | int | None]) -> None:
+        for key, value in values.items():
+            if value is None:
+                await self.connection.execute("DELETE FROM bot_config WHERE key = ?", (key,))
+                continue
+            await self.connection.execute(
+                """
+                INSERT INTO bot_config (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, str(value)),
+            )
+        await self.connection.commit()
+
     @staticmethod
     def _event_filter(event_key: str | None) -> tuple[str, tuple[object, ...]]:
         if event_key is None:

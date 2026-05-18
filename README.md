@@ -293,6 +293,8 @@ The script:
 rob blacklist <discord_user_id> [reason]   # silently block a user
 rob unblacklist <discord_user_id>
 rob blacklisted                            # list all blocked users
+rob count start [number]                   # start counting from number (default 0)
+rob count end                              # pause counting
 rob restart                               # restart the bot
 
 # Throne admin
