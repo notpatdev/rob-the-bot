@@ -1,6 +1,7 @@
 """Event and leaderboard runtime for Rob the Bot."""
 from __future__ import annotations
 
+import ast
 import asyncio
 import logging
 import random
@@ -77,6 +78,7 @@ _COUNT_KEY_FAILED_USER_ID = "count.failed_user_id"
 _COUNT_RESTORE_MODE_OWNER = "owner"
 _COUNT_RESTORE_MODE_SUBMISSIVE = "submissive"
 _COUNT_UNSET = object()
+_COUNT_EXPRESSION_STRIP_RE = re.compile(r"[^0-9+\-*/()]")
 _RULE_HELP_TOPICS = "age, dm, respect, spam, catfish, ai, school, intro, oneintro, verify, scammer, coercion, dox"
 _RULE_HELP_MESSAGE = f"Use `!rule <topic>`.\nSupported topics: {_RULE_HELP_TOPICS}"
 _RULE_RESPONSES: dict[str, str] = {
@@ -547,6 +549,51 @@ class RobEventCog(commands.Cog):
             return parsed.replace(tzinfo=timezone.utc)
         return parsed
 
+    @classmethod
+    def _parse_count_input(cls, raw: str) -> int | None:
+        expression = _COUNT_EXPRESSION_STRIP_RE.sub("", raw)
+        if not expression or not any(char.isdigit() for char in expression):
+            return None
+        try:
+            parsed = ast.parse(expression, mode="eval")
+        except SyntaxError:
+            return None
+
+        def _eval(node: ast.AST) -> int | float:
+            if isinstance(node, ast.Expression):
+                return _eval(node.body)
+            if isinstance(node, ast.Constant) and isinstance(node.value, int):
+                return node.value
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+                operand = _eval(node.operand)
+                return operand if isinstance(node.op, ast.UAdd) else -operand
+            if isinstance(node, ast.BinOp):
+                left = _eval(node.left)
+                right = _eval(node.right)
+                if isinstance(node.op, ast.Add):
+                    return left + right
+                if isinstance(node.op, ast.Sub):
+                    return left - right
+                if isinstance(node.op, ast.Mult):
+                    return left * right
+                if isinstance(node.op, ast.Div):
+                    if right == 0:
+                        raise ZeroDivisionError
+                    return left / right
+            raise ValueError("Unsupported counting expression")
+
+        try:
+            value = _eval(parsed)
+        except (ValueError, TypeError, ZeroDivisionError):
+            return None
+        if isinstance(value, float):
+            if not value.is_integer():
+                return None
+            return int(value)
+        if isinstance(value, int):
+            return value
+        return None
+
     async def _load_counting_state(self) -> CountingState:
         values = await self.database.get_bot_config_values(
             keys=[
@@ -634,6 +681,20 @@ class RobEventCog(commands.Cog):
         except discord.HTTPException:
             return
 
+    def _count_paused_message(self, member: discord.Member) -> str:
+        send_tracking_channel_mention = (
+            f"<#{self.config.send_track_channel_id}>"
+            if self.config.send_track_channel_id > 0
+            else "the send tracking channel"
+        )
+        return (
+            "## Counting Paused!\n\n"
+            f"{member.mention} forgot how to count, as you are a sub it seems only right I give you 5 minutes "
+            "to send to any domme in the server and make sure it's tracking in "
+            f"{send_tracking_channel_mention} to restore the count. If you don't do this the count will go back "
+            "to 1 in 5 minutes time."
+        )
+
     async def _handle_count_failure(self, message: discord.Message, *, state: CountingState) -> None:
         await self._add_count_failure_reaction(message)
         member = message.author if isinstance(message.author, discord.Member) else None
@@ -650,9 +711,7 @@ class RobEventCog(commands.Cog):
                 restore_value=state.current_number,
                 failed_user_id=member.id,
             )
-            await message.channel.send(
-                "Count broke. Send to **angel2adore** on Throne and get it tracked within 5 minutes to restore the streak."
-            )
+            await message.channel.send(self._count_paused_message(member))
             return
 
         if self._member_has_role(member, self.config.submissive_role_id):
@@ -665,9 +724,7 @@ class RobEventCog(commands.Cog):
                 restore_value=state.current_number,
                 failed_user_id=member.id,
             )
-            await message.channel.send(
-                "Count broke. Send to any domme on Throne and make sure Rob tracks it within 5 minutes to restore the streak."
-            )
+            await message.channel.send(self._count_paused_message(member))
             return
 
         await self._save_counting_state(
@@ -692,11 +749,11 @@ class RobEventCog(commands.Cog):
             return
 
         content = message.content.strip()
-        if not content.isdigit():
+        entered = self._parse_count_input(content)
+        if entered is None:
             await self._handle_count_failure(message, state=state)
             return
 
-        entered = int(content)
         expected = state.current_number + 1
         if entered != expected:
             await self._handle_count_failure(message, state=state)
