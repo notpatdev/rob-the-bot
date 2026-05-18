@@ -1,6 +1,7 @@
 """Event and leaderboard runtime for Rob the Bot."""
 from __future__ import annotations
 
+import ast
 import asyncio
 import logging
 import random
@@ -77,6 +78,7 @@ _COUNT_KEY_FAILED_USER_ID = "count.failed_user_id"
 _COUNT_RESTORE_MODE_OWNER = "owner"
 _COUNT_RESTORE_MODE_SUBMISSIVE = "submissive"
 _COUNT_UNSET = object()
+_COUNT_EXPRESSION_STRIP_RE = re.compile(r"[^0-9+\-*/()]")
 _RULE_HELP_TOPICS = "age, dm, respect, spam, catfish, ai, school, intro, oneintro, verify, scammer, coercion, dox"
 _RULE_HELP_MESSAGE = f"Use `!rule <topic>`.\nSupported topics: {_RULE_HELP_TOPICS}"
 _RULE_RESPONSES: dict[str, str] = {
@@ -547,6 +549,51 @@ class RobEventCog(commands.Cog):
             return parsed.replace(tzinfo=timezone.utc)
         return parsed
 
+    @classmethod
+    def _parse_count_input(cls, raw: str) -> int | None:
+        expression = _COUNT_EXPRESSION_STRIP_RE.sub("", raw)
+        if not expression or not any(char.isdigit() for char in expression):
+            return None
+        try:
+            parsed = ast.parse(expression, mode="eval")
+        except SyntaxError:
+            return None
+
+        def _eval(node: ast.AST) -> int | float:
+            if isinstance(node, ast.Expression):
+                return _eval(node.body)
+            if isinstance(node, ast.Constant) and isinstance(node.value, int):
+                return node.value
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+                operand = _eval(node.operand)
+                return operand if isinstance(node.op, ast.UAdd) else -operand
+            if isinstance(node, ast.BinOp):
+                left = _eval(node.left)
+                right = _eval(node.right)
+                if isinstance(node.op, ast.Add):
+                    return left + right
+                if isinstance(node.op, ast.Sub):
+                    return left - right
+                if isinstance(node.op, ast.Mult):
+                    return left * right
+                if isinstance(node.op, ast.Div):
+                    if right == 0:
+                        raise ZeroDivisionError
+                    return left / right
+            raise ValueError("Unsupported counting expression")
+
+        try:
+            value = _eval(parsed)
+        except (ValueError, TypeError, ZeroDivisionError):
+            return None
+        if isinstance(value, float):
+            if not value.is_integer():
+                return None
+            return int(value)
+        if isinstance(value, int):
+            return value
+        return None
+
     async def _load_counting_state(self) -> CountingState:
         values = await self.database.get_bot_config_values(
             keys=[
@@ -692,11 +739,11 @@ class RobEventCog(commands.Cog):
             return
 
         content = message.content.strip()
-        if not content.isdigit():
+        entered = self._parse_count_input(content)
+        if entered is None:
             await self._handle_count_failure(message, state=state)
             return
 
-        entered = int(content)
         expected = state.current_number + 1
         if entered != expected:
             await self._handle_count_failure(message, state=state)
