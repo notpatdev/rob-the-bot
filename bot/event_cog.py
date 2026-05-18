@@ -681,6 +681,20 @@ class RobEventCog(commands.Cog):
         except discord.HTTPException:
             return
 
+    def _count_paused_message(self, member: discord.Member) -> str:
+        send_tracking_channel_mention = (
+            f"<#{self.config.send_track_channel_id}>"
+            if self.config.send_track_channel_id > 0
+            else "the send tracking channel"
+        )
+        return (
+            "## Counting Paused!\n\n"
+            f"{member.mention} forgot how to count, as you are a sub it seems only right I give you 5 minutes "
+            "to send to any domme in the server and make sure it's tracking in "
+            f"{send_tracking_channel_mention} to restore the count. If you don't do this the count will go back "
+            "to 1 in 5 minutes time."
+        )
+
     async def _handle_count_failure(self, message: discord.Message, *, state: CountingState) -> None:
         await self._add_count_failure_reaction(message)
         member = message.author if isinstance(message.author, discord.Member) else None
@@ -697,9 +711,7 @@ class RobEventCog(commands.Cog):
                 restore_value=state.current_number,
                 failed_user_id=member.id,
             )
-            await message.channel.send(
-                "Count broke. Send to **angel2adore** on Throne and get it tracked within 5 minutes to restore the streak."
-            )
+            await message.channel.send(self._count_paused_message(member))
             return
 
         if self._member_has_role(member, self.config.submissive_role_id):
@@ -712,9 +724,7 @@ class RobEventCog(commands.Cog):
                 restore_value=state.current_number,
                 failed_user_id=member.id,
             )
-            await message.channel.send(
-                "Count broke. Send to any domme on Throne and make sure Rob tracks it within 5 minutes to restore the streak."
-            )
+            await message.channel.send(self._count_paused_message(member))
             return
 
         await self._save_counting_state(
