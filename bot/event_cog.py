@@ -74,6 +74,7 @@ _COUNT_KEY_RESTORE_MODE = "count.restore_mode"
 _COUNT_KEY_RESTORE_UNTIL = "count.restore_until"
 _COUNT_KEY_RESTORE_VALUE = "count.restore_value"
 _COUNT_KEY_FAILED_USER_ID = "count.failed_user_id"
+_COUNT_KEY_LAST_USER_ID = "count.last_user_id"
 _COUNT_RESTORE_MODE_OWNER = "owner"
 _COUNT_RESTORE_MODE_SUBMISSIVE = "submissive"
 _COUNT_UNSET = object()
@@ -291,6 +292,7 @@ class CountingState:
     restore_until: datetime | None
     restore_value: int | None
     failed_user_id: int | None
+    last_user_id: int | None
 
 
 class RobEventCog(commands.Cog):
@@ -567,6 +569,7 @@ class RobEventCog(commands.Cog):
                 _COUNT_KEY_RESTORE_UNTIL,
                 _COUNT_KEY_RESTORE_VALUE,
                 _COUNT_KEY_FAILED_USER_ID,
+                _COUNT_KEY_LAST_USER_ID,
             ]
         )
         return CountingState(
@@ -581,6 +584,7 @@ class RobEventCog(commands.Cog):
                 else None
             ),
             failed_user_id=self._parse_count_int(values.get(_COUNT_KEY_FAILED_USER_ID), default=0) or None,
+            last_user_id=self._parse_count_int(values.get(_COUNT_KEY_LAST_USER_ID), default=0) or None,
         )
 
     async def _save_counting_state(
@@ -593,6 +597,7 @@ class RobEventCog(commands.Cog):
         restore_until: datetime | None | object = _COUNT_UNSET,
         restore_value: int | None | object = _COUNT_UNSET,
         failed_user_id: int | None | object = _COUNT_UNSET,
+        last_user_id: int | None | object = _COUNT_UNSET,
     ) -> None:
         values: dict[str, str | int | None] = {}
         if current_number is not None:
@@ -615,6 +620,8 @@ class RobEventCog(commands.Cog):
             )
         if failed_user_id is not _COUNT_UNSET:
             values[_COUNT_KEY_FAILED_USER_ID] = int(failed_user_id) if isinstance(failed_user_id, int) else None
+        if last_user_id is not _COUNT_UNSET:
+            values[_COUNT_KEY_LAST_USER_ID] = int(last_user_id) if isinstance(last_user_id, int) else None
         await self.database.set_bot_config_values(values=values)
 
     async def _expire_count_restore_if_needed(self, state: CountingState) -> CountingState:
@@ -630,6 +637,7 @@ class RobEventCog(commands.Cog):
             restore_until=None,
             restore_value=None,
             failed_user_id=None,
+            last_user_id=None,
         )
         return await self._load_counting_state()
 
@@ -698,6 +706,7 @@ class RobEventCog(commands.Cog):
             restore_until=None,
             restore_value=None,
             failed_user_id=None,
+            last_user_id=None,
         )
         await message.channel.send("Count failed. Restart at **1**.")
 
@@ -718,12 +727,19 @@ class RobEventCog(commands.Cog):
         if entered is None:
             return
 
+        if message.author.id == state.last_user_id:
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+            return
+
         expected = state.current_number + 1
         if entered != expected:
             await self._handle_count_failure(message, state=state)
             return
 
-        await self._save_counting_state(current_number=entered)
+        await self._save_counting_state(current_number=entered, last_user_id=message.author.id)
         try:
             await message.add_reaction(_COUNT_SUCCESS_REACTION)
         except discord.HTTPException:
@@ -763,6 +779,7 @@ class RobEventCog(commands.Cog):
             restore_until=None,
             restore_value=None,
             failed_user_id=None,
+            last_user_id=None,
         )
         channel = self.bot.get_channel(_COUNTING_CHANNEL_ID)
         if channel is None and self.config.guild_id:
@@ -903,6 +920,7 @@ class RobEventCog(commands.Cog):
             restore_until=None,
             restore_value=None,
             failed_user_id=None,
+            last_user_id=None,
         )
         await interaction.response.send_message(
             f"Count fixed. Next valid number is **{startingnumber + 1}**.",
